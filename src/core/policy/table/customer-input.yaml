@@ -1,0 +1,87 @@
+# C · Customer input
+#
+# A typo. The highest-recovery class in the taxonomy: intent is proven, the fix
+# takes seconds, and the customer is very often still on the page.
+#
+# The only rule that matters here is SPEED. Intent decays in minutes. A ladder
+# that opens at 30 minutes has already lost most of what it could have recovered.
+# This is the one class whose floor is zero.
+
+- id: customer_input.default
+  version: 1
+  description: >
+    Class-level ladder for a mistyped field. Opens immediately, closes quickly —
+    two touches, because a third message about a typo is nagging.
+  match:
+    causeClass: [customer_input]
+    attended: true
+  ladder:
+    - at: 0m
+      action: nudge
+      channels: [whatsapp, sms]
+      intent: switch_method
+      note: Zero delay. They are looking at the error right now.
+    - at: 45m
+      action: nudge
+      channels: [whatsapp]
+      intent: reminder
+  preconditions:
+    [order_unpaid, no_live_attempt, consent_ok, not_quiet_hours, within_frequency_cap, channel_deliverable]
+  abortOn: [order_paid, payment_link_paid, customer_optout, deadline_passed]
+  maxMessages: 2
+  holdoutEligible: true
+
+- id: customer_input.incorrect_otp
+  version: 1
+  description: >
+    Usually a late OTP rather than a wrong one. The first touch offers a straight
+    retry; the second deliberately moves them off the card, because diagnose.ts
+    withdraws same-instrument retry after two attempts and a third wrong OTP
+    commonly locks the card at the issuer.
+  match:
+    errorReason: incorrect_otp
+    causeClass: [customer_input]
+    attended: true
+  ladder:
+    - at: 0m
+      action: nudge
+      channels: [whatsapp, sms]
+      intent: switch_method
+      suggest: [retry_same, upi_intent]
+    - at: 30m
+      action: nudge
+      channels: [whatsapp]
+      intent: reminder
+      suggest: [upi_intent, other_card]
+      note: >
+        No retry_same on the second touch. If the OTP failed twice, sending them
+        back for a third attempt risks costing them the card entirely.
+  preconditions:
+    [order_unpaid, no_live_attempt, consent_ok, not_quiet_hours, within_frequency_cap, channel_deliverable]
+  abortOn: [order_paid, payment_link_paid, customer_optout, deadline_passed]
+  maxMessages: 2
+  holdoutEligible: true
+
+- id: customer_input.incorrect_cvv
+  version: 1
+  description: A mistyped CVV — the single most recoverable failure we see.
+  match:
+    errorReason: incorrect_cvv
+    causeClass: [customer_input]
+    attended: true
+  ladder:
+    - at: 0m
+      action: nudge
+      channels: [whatsapp, sms]
+      intent: switch_method
+      suggest: [retry_same, upi_intent]
+    - at: 45m
+      action: nudge
+      channels: [whatsapp]
+      intent: reminder
+      suggest: [upi_intent, other_card]
+  preconditions:
+    [order_unpaid, no_live_attempt, consent_ok, not_quiet_hours, within_frequency_cap, channel_deliverable]
+  abortOn: [order_paid, payment_link_paid, customer_optout, deadline_passed]
+  maxMessages: 2
+  holdoutEligible: true

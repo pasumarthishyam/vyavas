@@ -1,0 +1,81 @@
+# Unattended debits (mandate present)
+#
+# The only rows in the table permitted to re-present a debit, and the compiler
+# enforces that: any ladder containing `retry_debit` or `send_pre_debit_notice`
+# MUST constrain `attended: false`, MUST require the `mandate_active`
+# precondition, and MUST schedule the pre-debit notice before the debit.
+#
+# Under RBI rules there is no lawful silent card retry in India without a
+# mandate, and every mandated debit needs notice in advance. Those are not
+# tunable — they are why these rows are separated from everything else.
+#
+# Note what is NOT here: instrument_dead. A mandate riding an expired card is
+# itself dead, and diagnose() forces those cases back to `attended: true` so
+# they land on the re-registration path instead of burning re-presentments
+# against something that can never succeed.
+
+- id: unattended.mandate_retry
+  version: 1
+  description: >
+    Re-present a mandated debit that failed for a recoverable reason, with the
+    required pre-debit notice ahead of each attempt and one human touch in
+    between.
+  match:
+    causeClass: [funds_limits, transient_infra, auth_friction]
+    attended: false
+  ladder:
+    - at: 0m
+      action: send_pre_debit_notice
+      channels: [whatsapp, sms]
+      leadTime: 24h
+      note: RBI pre-debit notification. Must precede the re-presentment.
+    - at: 25h
+      action: retry_debit
+      note: >
+        Just past the 24h notice window. The mandate_active precondition
+        re-checks the mandate is still valid before this fires.
+    - at: 26h
+      action: nudge
+      channels: [whatsapp]
+      intent: subscription_at_risk
+      note: >
+        Only after the silent path has been tried. Recovering without ever
+        bothering the customer is the highest-value outcome available.
+    - at: 3d
+      action: send_pre_debit_notice
+      channels: [whatsapp, sms]
+      leadTime: 24h
+    - at: 4d
+      action: retry_debit
+  preconditions:
+    [order_unpaid, consent_ok, not_quiet_hours, within_frequency_cap, channel_deliverable, mandate_active]
+  abortOn:
+    [order_paid, customer_optout, subscription_cancelled, merchant_disconnected, deadline_passed]
+  maxMessages: 3
+  holdoutEligible: true
+
+- id: unattended.no_retry
+  version: 1
+  description: >
+    A mandated debit failed for a reason no re-presentment can fix — a typo, a
+    dead instrument, a risk decline, a merchant misconfiguration, or a customer
+    who cancelled. Re-presenting would burn attempts against something that
+    cannot succeed, so this is a single human touch and nothing else.
+  match:
+    causeClass: [customer_input, instrument_dead, risk, merchant_config, intent_exit]
+    attended: false
+  ladder:
+    - at: 25m
+      action: nudge
+      channels: [whatsapp, sms]
+      intent: subscription_at_risk
+      note: >
+        No `suggest` — inherit the diagnosis rails, which already exclude
+        anything the cause class forbids. One touch only: the ceiling here is the
+        strictest of the five classes this row covers.
+  preconditions:
+    [order_unpaid, no_live_attempt, consent_ok, not_quiet_hours, within_frequency_cap, channel_deliverable]
+  abortOn:
+    [order_paid, customer_optout, subscription_cancelled, merchant_disconnected, deadline_passed]
+  maxMessages: 1
+  holdoutEligible: true

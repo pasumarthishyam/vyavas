@@ -1,0 +1,148 @@
+# B · Instrument unusable
+#
+# The card, account or VPA cannot complete a payment. No amount of retrying
+# changes that, so every ladder here goes straight to "use something else".
+#
+# Tone is the whole game. "Payment failed, please try again" is useless when the
+# customer's bank has online transactions switched off — they need to be told
+# what is actually wrong and given a rail that works right now.
+
+- id: instrument_dead.default
+  version: 1
+  description: Class-level ladder for any unusable instrument. Switch rails, do not retry.
+  match:
+    causeClass: [instrument_dead]
+    attended: true
+  ladder:
+    - at: 5m
+      action: nudge
+      channels: [whatsapp, sms]
+      intent: switch_method
+      note: >
+        No `suggest` — inherit the rails the diagnosis already worked out, which
+        account for the failing method (e.g. a dead VPA never gets offered UPI).
+    - at: 8h
+      action: nudge
+      channels: [whatsapp]
+      intent: reminder
+  preconditions:
+    [order_unpaid, no_live_attempt, consent_ok, not_quiet_hours, within_frequency_cap, channel_deliverable]
+  abortOn: [order_paid, payment_link_paid, customer_optout, deadline_passed]
+  maxMessages: 2
+  holdoutEligible: true
+
+- id: instrument_dead.card_expired
+  version: 1
+  description: >
+    The card has expired. High volume, unambiguous, and the customer can fix it
+    in ten seconds if we tell them what happened.
+  match:
+    errorReason: card_expired
+    causeClass: [instrument_dead]
+    attended: true
+  ladder:
+    - at: 4m
+      action: nudge
+      channels: [whatsapp, sms]
+      intent: switch_method
+      suggest: [upi_intent, other_card]
+      attachPaymentLink: true
+      note: >
+        Four minutes, not instantly: the no_live_attempt precondition holds this
+        back if they are already mid-retry on another card.
+    - at: 6h
+      action: nudge
+      channels: [whatsapp]
+      intent: reminder
+      suggest: [upi_intent, other_card]
+    - at: 26h
+      action: nudge
+      channels: [email, sms]
+      intent: final_reminder
+  preconditions:
+    [order_unpaid, no_live_attempt, consent_ok, not_quiet_hours, within_frequency_cap, channel_deliverable]
+  abortOn: [order_paid, payment_link_paid, customer_optout, deadline_passed]
+  maxMessages: 3
+  holdoutEligible: true
+
+- id: instrument_dead.card_not_enrolled
+  version: 1
+  description: >
+    The card is not enabled for online transactions. Enormous on Indian debit
+    cards and almost always recoverable — but only with an educational message,
+    because the customer has no idea this is a setting.
+  match:
+    errorReason: card_not_enrolled
+    causeClass: [instrument_dead]
+    attended: true
+  ladder:
+    - at: 4m
+      action: nudge
+      channels: [whatsapp, sms]
+      intent: bank_action_required
+      suggest: [upi_intent, other_card]
+      note: >
+        Explain the setting AND offer UPI. Most customers will take UPI now and
+        fix the card later, which is the outcome we want.
+    - at: 8h
+      action: nudge
+      channels: [whatsapp]
+      intent: reminder
+      suggest: [upi_intent, other_card]
+  preconditions:
+    [order_unpaid, no_live_attempt, consent_ok, not_quiet_hours, within_frequency_cap, channel_deliverable]
+  abortOn: [order_paid, payment_link_paid, customer_optout, deadline_passed]
+  maxMessages: 2
+  holdoutEligible: true
+
+- id: instrument_dead.card_disabled_for_online_payments
+  version: 1
+  description: >
+    Online payments are switched off on this card. Same shape as card_not_enrolled —
+    fixable by the customer in their banking app, with UPI as the immediate answer.
+  match:
+    errorReason: card_disabled_for_online_payments
+    causeClass: [instrument_dead]
+    attended: true
+  ladder:
+    - at: 4m
+      action: nudge
+      channels: [whatsapp, sms]
+      intent: bank_action_required
+      suggest: [upi_intent, other_card]
+    - at: 8h
+      action: nudge
+      channels: [whatsapp]
+      intent: reminder
+      suggest: [upi_intent, other_card]
+  preconditions:
+    [order_unpaid, no_live_attempt, consent_ok, not_quiet_hours, within_frequency_cap, channel_deliverable]
+  abortOn: [order_paid, payment_link_paid, customer_optout, deadline_passed]
+  maxMessages: 2
+  holdoutEligible: true
+
+- id: instrument_dead.invalid_vpa
+  version: 1
+  description: >
+    The UPI handle is deregistered or invalid. Deliberately carries no `suggest`
+    block so it inherits the diagnosis rails, which have already stripped both
+    UPI intent and UPI collect — offering either would point the customer back
+    at the handle that just failed.
+  match:
+    errorReason: invalid_vpa
+    causeClass: [instrument_dead]
+    attended: true
+  ladder:
+    - at: 4m
+      action: nudge
+      channels: [whatsapp, sms]
+      intent: switch_method
+    - at: 8h
+      action: nudge
+      channels: [whatsapp]
+      intent: reminder
+  preconditions:
+    [order_unpaid, no_live_attempt, consent_ok, not_quiet_hours, within_frequency_cap, channel_deliverable]
+  abortOn: [order_paid, payment_link_paid, customer_optout, deadline_passed]
+  maxMessages: 2
+  holdoutEligible: true

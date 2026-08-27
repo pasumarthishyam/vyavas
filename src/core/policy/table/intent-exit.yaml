@@ -1,0 +1,67 @@
+# I · Deliberate exit
+#
+# The customer chose to leave. This is a live intent signal, not a malfunction.
+#
+# Everything about this class is deliberately different from the failure classes:
+# the intent vocabulary is `cart_saved`, never `switch_method`; the framing is
+# informational, never apologetic; and it never counts toward failure-rate
+# alerting. Telling someone their payment "failed" when they pressed Back is
+# both wrong and irritating, and it is how recovery tooling earns its reputation
+# for being spam.
+
+- id: intent_exit.default
+  version: 1
+  description: >
+    Class-level ladder for a deliberate exit or an abandoned checkout. Low
+    pressure, no urgency theatre, no discounting.
+  match:
+    causeClass: [intent_exit]
+    attended: true
+  ladder:
+    - at: 25m
+      action: nudge
+      channels: [whatsapp]
+      intent: cart_saved
+      note: >
+        Twenty-five minutes. Long enough that we are not chasing someone who
+        stepped away for a moment to find their other card.
+    - at: 6h
+      action: nudge
+      channels: [whatsapp]
+      intent: reminder
+    - at: 26h
+      action: nudge
+      channels: [email]
+      intent: final_reminder
+  preconditions:
+    [order_unpaid, no_live_attempt, consent_ok, not_quiet_hours, within_frequency_cap, channel_deliverable]
+  abortOn: [order_paid, payment_link_paid, customer_optout, deadline_passed]
+  maxMessages: 3
+  holdoutEligible: true
+
+- id: intent_exit.payment_cancelled
+  version: 1
+  description: >
+    The customer cancelled at the payment step — the highest-intent exit we see,
+    because they had already chosen how to pay. Two touches, close together, then
+    we leave them alone.
+  match:
+    errorReason: payment_cancelled
+    causeClass: [intent_exit]
+    attended: true
+  ladder:
+    - at: 25m
+      action: nudge
+      channels: [whatsapp]
+      intent: cart_saved
+      suggest: [retry_same, upi_intent]
+      attachPaymentLink: true
+    - at: 20h
+      action: nudge
+      channels: [whatsapp, email]
+      intent: reminder
+  preconditions:
+    [order_unpaid, no_live_attempt, consent_ok, not_quiet_hours, within_frequency_cap, channel_deliverable]
+  abortOn: [order_paid, payment_link_paid, customer_optout, deadline_passed]
+  maxMessages: 2
+  holdoutEligible: true

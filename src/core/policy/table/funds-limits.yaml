@@ -1,0 +1,94 @@
+# E · Funds and limits
+#
+# The instrument works. The money, or the headroom, is not there right now.
+# Timing is the entire lever — which is why this class has the longest floor
+# (three hours) and the most touches (four). Messaging someone twenty minutes
+# after their balance ran out achieves nothing except irritation.
+#
+# The Stage 6 scheduler will refine these offsets toward salary-cycle boundaries
+# and the customer's own observed success times. These are the cold-start values.
+
+- id: funds_limits.default
+  version: 1
+  description: Class-level ladder for a shortfall or a limit. Slow, patient, low-pressure.
+  match:
+    causeClass: [funds_limits]
+    attended: true
+  ladder:
+    - at: 3h
+      action: nudge
+      channels: [whatsapp]
+      intent: switch_method
+      note: Three-hour floor for this class. Anything sooner is nagging, not helping.
+    - at: 26h
+      action: nudge
+      channels: [whatsapp, sms]
+      intent: reminder
+  preconditions:
+    [order_unpaid, no_live_attempt, consent_ok, not_quiet_hours, within_frequency_cap, channel_deliverable]
+  abortOn: [order_paid, payment_link_paid, customer_optout, deadline_passed]
+  maxMessages: 2
+  holdoutEligible: true
+
+- id: funds_limits.insufficient_funds
+  version: 1
+  description: >
+    Not enough balance. The alternates that matter are a different account over
+    UPI, or spreading the cost — never pressure. The diagnosis has already
+    stripped EMI from the rails on small tickets where it does not exist.
+  match:
+    errorReason: insufficient_funds
+    causeClass: [funds_limits]
+    attended: true
+  ladder:
+    - at: 3h
+      action: nudge
+      channels: [whatsapp]
+      intent: switch_method
+    - at: 26h
+      action: nudge
+      channels: [whatsapp, sms]
+      intent: reminder
+    - at: 3d
+      action: nudge
+      channels: [email, sms]
+      intent: final_reminder
+      note: >
+        Third touch lands near the next common salary-credit window. Stage 6
+        replaces this fixed offset with the payer's observed cycle.
+  preconditions:
+    [order_unpaid, no_live_attempt, consent_ok, not_quiet_hours, within_frequency_cap, channel_deliverable]
+  abortOn: [order_paid, payment_link_paid, customer_optout, deadline_passed]
+  maxMessages: 3
+  holdoutEligible: true
+
+- id: funds_limits.transaction_limit_exceeded
+  version: 1
+  description: >
+    A per-transaction or daily cap was hit. One of the few genuinely deterministic
+    retry windows we get: daily limits reset at midnight, so the second touch
+    deliberately offers the same instrument again.
+  match:
+    errorReason: transaction_limit_exceeded
+    causeClass: [funds_limits]
+    attended: true
+  ladder:
+    - at: 3h
+      action: nudge
+      channels: [whatsapp, sms]
+      intent: switch_method
+      suggest: [upi_intent, other_card]
+      note: Immediate answer is a different rail, or splitting the payment.
+    - at: 26h
+      action: nudge
+      channels: [whatsapp]
+      intent: reminder
+      suggest: [retry_same, upi_intent]
+      note: >
+        Past midnight the original card's daily limit has reset, so retry_same is
+        genuinely the best suggestion here — unusual for a declined card.
+  preconditions:
+    [order_unpaid, no_live_attempt, consent_ok, not_quiet_hours, within_frequency_cap, channel_deliverable]
+  abortOn: [order_paid, payment_link_paid, customer_optout, deadline_passed]
+  maxMessages: 2
+  holdoutEligible: true

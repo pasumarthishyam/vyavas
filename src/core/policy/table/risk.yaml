@@ -1,0 +1,64 @@
+# F · Risk
+#
+# The one class where trying harder makes things worse.
+#
+# Repeated attempts after a risk decline raise the issuer's score, can get the
+# card blocked, and degrade the merchant's authorisation rate across every other
+# customer. The cost of over-trying is not borne by this case alone — which is
+# why the ceiling is a single touch on a single alternate rail, and why the
+# compiler refuses any row here that exceeds it.
+#
+# The copy rule is equally hard: we NEVER tell a customer they were flagged.
+# "Your bank couldn't complete this — UPI usually works" is the whole permitted
+# vocabulary.
+
+- id: risk.default
+  version: 1
+  description: >
+    Class-level ladder for a risk or fraud decline. Exactly one touch, exactly
+    one alternate rail, neutral framing.
+  match:
+    causeClass: [risk]
+    attended: true
+  ladder:
+    - at: 15m
+      action: nudge
+      channels: [whatsapp]
+      intent: switch_method
+      suggest: [upi_intent]
+      attachPaymentLink: true
+      note: >
+        UPI only. Offering another card invites a second decline against the same
+        risk profile, which is worse than saying nothing.
+  preconditions:
+    [order_unpaid, no_live_attempt, consent_ok, not_quiet_hours, within_frequency_cap, channel_deliverable]
+  abortOn: [order_paid, payment_link_paid, customer_optout, deadline_passed]
+  maxMessages: 1
+  holdoutEligible: true
+
+- id: risk.payment_risk_check_failed
+  version: 1
+  description: >
+    An explicit fraud-system refusal. Same single touch as the class default, but
+    escalated to a human review queue so the merchant can look at the pattern —
+    a burst of these is a signal about the merchant's own risk rules, not about
+    any one payer.
+  match:
+    errorReason: payment_risk_check_failed
+    causeClass: [risk]
+    attended: true
+  ladder:
+    - at: 15m
+      action: nudge
+      channels: [whatsapp]
+      intent: switch_method
+      suggest: [upi_intent]
+    - at: 2h
+      action: escalate_to_human
+      queue: risk_review
+      note: Not a customer touch. Puts the case in front of a person, quietly.
+  preconditions:
+    [order_unpaid, no_live_attempt, consent_ok, not_quiet_hours, within_frequency_cap, channel_deliverable]
+  abortOn: [order_paid, payment_link_paid, customer_optout, deadline_passed]
+  maxMessages: 1
+  holdoutEligible: true

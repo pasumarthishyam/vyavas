@@ -1,0 +1,94 @@
+# G · Merchant configuration
+#
+# The merchant's own setup is broken. Every customer hitting this is a total,
+# ongoing, silent loss — and the merchant almost certainly does not know.
+#
+# Two independent tracks, deliberately:
+#
+#   MERCHANT track — diagnostic, never prescriptive. We state the fact, the
+#   onset time and the baseline. We do NOT say "disable this method": which
+#   payment options a merchant offers is their commercial decision, and turning
+#   one off could cost far more than the outage.
+#
+#   CUSTOMER track — rescue, immediately, warmly, without ever implying the
+#   customer did something wrong or that the merchant is broken. One touch.
+
+- id: merchant_config.default
+  version: 1
+  description: >
+    Class-level ladder for a merchant-side configuration fault. Alerts the
+    merchant with facts and rescues the affected customer onto a working rail.
+  match:
+    causeClass: [merchant_config]
+    attended: true
+  ladder:
+    - at: 0m
+      action: merchant_alert
+      severity: critical
+      minAffectedCases: 3
+      note: >
+        Three cases before firing, so a single odd request does not page anyone.
+        The alert states what broke, when it started, and the normal baseline —
+        and stops there.
+    - at: 2m
+      action: nudge
+      channels: [whatsapp, sms]
+      intent: switch_method
+      suggest: [upi_intent, other_card]
+      note: >
+        Warm and blameless. Never names a fault, never says "failed", never
+        suggests the customer did anything wrong — because they did not.
+  preconditions:
+    [order_unpaid, no_live_attempt, consent_ok, not_quiet_hours, within_frequency_cap, channel_deliverable]
+  abortOn: [order_paid, payment_link_paid, customer_optout, deadline_passed]
+  maxMessages: 1
+  # Never held out: withholding a breakage alert from a merchant in order to
+  # measure incrementality would be indefensible.
+  holdoutEligible: false
+
+- id: merchant_config.bank_not_enabled
+  version: 1
+  description: >
+    A payment method the merchant has not enabled. The highest-signal member of
+    this class — it concentrates on one bank and one method, which makes the
+    merchant alert unusually actionable.
+  match:
+    errorReason: bank_not_enabled
+    causeClass: [merchant_config]
+    attended: true
+  ladder:
+    - at: 0m
+      action: merchant_alert
+      severity: critical
+      minAffectedCases: 3
+    - at: 2m
+      action: nudge
+      channels: [whatsapp, sms]
+      intent: switch_method
+      suggest: [upi_intent, other_card]
+  preconditions:
+    [order_unpaid, no_live_attempt, consent_ok, not_quiet_hours, within_frequency_cap, channel_deliverable]
+  abortOn: [order_paid, payment_link_paid, customer_optout, deadline_passed]
+  maxMessages: 1
+  holdoutEligible: false
+
+- id: merchant_config.merchant_not_activated
+  version: 1
+  description: >
+    The merchant account itself is not live. Nothing can be recovered until a
+    human fixes it, so this alerts hard and does not pretend otherwise.
+  match:
+    errorReason: merchant_not_activated
+    causeClass: [merchant_config]
+  ladder:
+    - at: 0m
+      action: merchant_alert
+      severity: critical
+      minAffectedCases: 1
+    - at: 5m
+      action: escalate_to_human
+      queue: merchant_review
+  preconditions: [order_unpaid]
+  abortOn: [order_paid, merchant_disconnected, deadline_passed]
+  maxMessages: 0
+  holdoutEligible: false

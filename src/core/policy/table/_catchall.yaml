@@ -1,0 +1,34 @@
+# The catch-all.
+#
+# Exactly one row in the table carries `catchAll: true`, and compilePolicyTable
+# refuses to build a table without it. Its purpose is that no input can ever
+# resolve to nothing — a case with no policy is a case we silently drop, and a
+# dropped case is money lost without anyone noticing.
+#
+# In practice it should be unreachable: the compiler separately asserts that
+# every one of the nine cause classes has an explicit row, and diagnose() always
+# returns one of those nine. This exists for the day that stops being true —
+# a new cause class added without a ladder, or a table edited in a hurry.
+#
+# It must never contact a customer. An input we did not anticipate is the last
+# one that should be messaged: we do not know what went wrong, so we cannot know
+# what would be true to say. It escalates to a human and stops.
+
+- id: catchall
+  version: 1
+  description: >
+    Last-resort row. Reaches no customer; puts the case in front of a person and
+    stops. Reaching this row is itself a defect worth investigating.
+  match: {}
+  ladder:
+    - at: 0m
+      action: escalate_to_human
+      queue: merchant_review
+      note: >
+        If this fires, a cause class is missing a ladder. The compiler should
+        have caught it — investigate the table, not the case.
+  preconditions: [order_unpaid]
+  abortOn: [order_paid, customer_optout, deadline_passed]
+  maxMessages: 0
+  holdoutEligible: false
+  catchAll: true

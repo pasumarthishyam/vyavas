@@ -1,0 +1,24 @@
+# H · Terminal / no-op
+#
+# Already paid, or a duplicate. There is no revenue at risk.
+#
+# The correct policy is an EMPTY LADDER. That is not an oversight — it is the
+# most important row in the table. diagnose() has already set shouldAbort, and
+# the workflow closes the case and cancels every queued action.
+#
+# Messaging a customer who has already paid is the single mistake that would get
+# this product removed from a merchant's stack permanently, and no amount of
+# recovered revenue elsewhere would buy that trust back.
+
+- id: terminal_noop.default
+  version: 1
+  description: >
+    No revenue at risk. Do nothing at all — no ladder, no touches, no alert.
+    Close the case and cancel everything already scheduled.
+  match:
+    causeClass: [terminal_noop]
+  ladder: []
+  preconditions: []
+  abortOn: [order_paid, deadline_passed]
+  maxMessages: 0
+  holdoutEligible: false

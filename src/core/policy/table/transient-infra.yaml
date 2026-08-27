@@ -1,0 +1,108 @@
+# A · Transient infrastructure
+#
+# The bank or gateway fell over. The instrument is fine and the customer did
+# nothing wrong — only the timing was bad.
+#
+# The defining move of this class: we do NOT guess "retry in 2-3 hours". We park
+# on Razorpay's downtime feed and strike the moment the bank actually recovers.
+# "Your bank is back online, tap to finish" is a different product from "please
+# try again", and it also stops us nudging someone into a second failure while
+# the outage is still open.
+
+- id: transient_infra.default
+  version: 1
+  description: >
+    Class-level ladder for any transient bank or gateway failure. Waits on the
+    downtime feed first, then re-engages once service is restored.
+  match:
+    causeClass: [transient_infra]
+    attended: true
+  ladder:
+    - at: 0m
+      action: await_downtime_resolution
+      timeout: 4h
+      note: Park until Razorpay reports the outage resolved, or four hours pass.
+    - at: 25m
+      action: nudge
+      channels: [whatsapp, sms]
+      intent: retry_now_service_restored
+      note: >
+        Earliest permitted touch for this class is 20m — before that they may
+        still be retrying and the bank is probably still down.
+    - at: 4h
+      action: nudge
+      channels: [whatsapp]
+      intent: reminder
+  preconditions:
+    [order_unpaid, no_live_attempt, consent_ok, not_quiet_hours, within_frequency_cap, channel_deliverable]
+  abortOn: [order_paid, payment_link_paid, customer_optout, deadline_passed]
+  maxMessages: 2
+  holdoutEligible: true
+
+- id: transient_infra.bank_technical_error
+  version: 1
+  description: >
+    The customer's own bank had a technical problem. Highest-volume member of
+    this class and the one most worth waiting out precisely.
+  match:
+    errorReason: bank_technical_error
+    causeClass: [transient_infra]
+    attended: true
+  ladder:
+    - at: 0m
+      action: await_downtime_resolution
+      timeout: 4h
+    - at: 20m
+      action: nudge
+      channels: [whatsapp, sms]
+      intent: retry_now_service_restored
+      suggest: [retry_same, upi_intent]
+      note: >
+        retry_same is legitimate here and nowhere in the dead-instrument classes —
+        the card was never the problem.
+    - at: 3h
+      action: nudge
+      channels: [whatsapp]
+      intent: reminder
+      suggest: [upi_intent, other_card]
+    - at: 26h
+      action: nudge
+      channels: [email, sms]
+      intent: final_reminder
+  preconditions:
+    [order_unpaid, no_live_attempt, consent_ok, not_quiet_hours, within_frequency_cap, channel_deliverable]
+  abortOn: [order_paid, payment_link_paid, customer_optout, deadline_passed]
+  maxMessages: 3
+  holdoutEligible: true
+
+- id: transient_infra.bank_cutoff_in_progress
+  version: 1
+  description: >
+    The bank's core banking system is in its nightly cutoff window. Deterministically
+    time-bound, and always in the middle of the night — so we wait it out silently
+    and never message during it.
+  match:
+    errorReason: bank_cutoff_in_progress
+    causeClass: [transient_infra]
+    attended: true
+  ladder:
+    - at: 0m
+      action: await_downtime_resolution
+      timeout: 6h
+      note: Cutoff windows resolve on their own. Nothing to say to the customer yet.
+    - at: 8h
+      action: nudge
+      channels: [whatsapp, sms]
+      intent: retry_now_service_restored
+      note: >
+        By now the window has closed and quiet hours have passed. The
+        not_quiet_hours precondition defers this if it has not.
+    - at: 26h
+      action: nudge
+      channels: [email]
+      intent: final_reminder
+  preconditions:
+    [order_unpaid, no_live_attempt, consent_ok, not_quiet_hours, within_frequency_cap, channel_deliverable]
+  abortOn: [order_paid, payment_link_paid, customer_optout, deadline_passed]
+  maxMessages: 2
+  holdoutEligible: true

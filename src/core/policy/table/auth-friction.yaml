@@ -1,0 +1,62 @@
+# D · Authentication friction
+#
+# 3DS or OTP did not complete. In India this is very often SMS delivery latency
+# or a slow bank challenge page rather than a real refusal, which is why exactly
+# one same-instrument retry is justified here — and why the second touch moves
+# them to UPI rather than sending them back into the same 3DS page a third time.
+
+- id: auth_friction.default
+  version: 1
+  description: >
+    Class-level ladder for an incomplete authentication. One retry on the same
+    rail, then a switch.
+  match:
+    causeClass: [auth_friction]
+    attended: true
+  ladder:
+    - at: 10m
+      action: nudge
+      channels: [whatsapp, sms]
+      intent: switch_method
+      suggest: [retry_same, upi_intent]
+    - at: 4h
+      action: nudge
+      channels: [whatsapp]
+      intent: reminder
+      suggest: [upi_intent, other_card]
+    - at: 26h
+      action: nudge
+      channels: [email, sms]
+      intent: final_reminder
+  preconditions:
+    [order_unpaid, no_live_attempt, consent_ok, not_quiet_hours, within_frequency_cap, channel_deliverable]
+  abortOn: [order_paid, payment_link_paid, customer_optout, deadline_passed]
+  maxMessages: 3
+  holdoutEligible: true
+
+- id: auth_friction.payment_timed_out
+  version: 1
+  description: >
+    The customer ran out of time on the bank's challenge page. Often the page
+    itself was slow, so the first touch is a straightforward "pick up where you
+    left off" rather than anything implying they did something wrong.
+  match:
+    errorReason: payment_timed_out
+    causeClass: [auth_friction]
+    attended: true
+  ladder:
+    - at: 10m
+      action: nudge
+      channels: [whatsapp, sms]
+      intent: switch_method
+      suggest: [retry_same, upi_intent]
+    - at: 6h
+      action: nudge
+      channels: [whatsapp]
+      intent: reminder
+      suggest: [upi_intent, other_card]
+  preconditions:
+    [order_unpaid, no_live_attempt, consent_ok, not_quiet_hours, within_frequency_cap, channel_deliverable]
+  abortOn: [order_paid, payment_link_paid, customer_optout, deadline_passed]
+  maxMessages: 2
+  holdoutEligible: true
