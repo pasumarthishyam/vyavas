@@ -87,6 +87,11 @@ export async function upsertCustomer(
     if (!found.name && input.name) patch.name = input.name;
     if (!found.rzpCustomerId && input.rzpCustomerId) patch.rzpCustomerId = input.rzpCustomerId;
 
+    // Seeing them on a payment refreshes the transactional basis. This is what
+    // makes a recovery message sendable at all — no explicit opt-in is ever
+    // collected at an Indian checkout.
+    patch.transactionalBasisAt = sql`now()`;
+
     if (Object.keys(patch).length > 0) {
       patch.updatedAt = sql`now()`;
       await db.update(customers).set(patch).where(eq(customers.id, found.id));
@@ -104,6 +109,7 @@ export async function upsertCustomer(
       rzpCustomerId: input.rzpCustomerId ?? null,
       externalRef: input.externalRef ?? null,
       locale: input.locale ?? 'en-IN',
+      transactionalBasisAt: sql`now()`,
     })
     .onConflictDoNothing()
     .returning({ id: customers.id });

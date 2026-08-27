@@ -1,0 +1,1 @@
+ALTER TABLE "customers" ADD COLUMN "transactional_basis_at" timestamp with time zone;

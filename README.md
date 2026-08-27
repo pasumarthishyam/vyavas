@@ -57,8 +57,8 @@ consequences, and they are the point:
 | 3 | Persistence — Drizzle schema, advisory locks, webhook dedupe | ✅ done |
 | 4 | Razorpay adapter + Ingest | ✅ done |
 | 5 | Read-only Revenue-at-Risk dashboard → **ship to partners** | ✅ done |
-| 6 | Execute (Inngest), dry-run only | next |
-| 7 | Channels — WhatsApp / SMS / email, live | |
+| 6 | Execute (Inngest), dry-run only | ✅ done |
+| 7 | Channels — WhatsApp / SMS / email, live | next |
 | 8 | Measure + Partner OAuth | |
 
 ---
@@ -85,6 +85,11 @@ npm run dev           # the dashboard, http://localhost:3000
 npm run build         # production build
 npm run seed:demo -- --reset   # realistic demo data through the real pipeline
 npm run fixtures:capture       # pull real failure payloads from Razorpay test mode
+
+npm run dev:inngest            # local Inngest dev server (run alongside npm run dev)
+npm run replay                 # what the CURRENT policy table would do to real cases
+npm run replay -- --case=<id>  # one case, rung by rung, with the gate reasoning
+npm run dry-run:report         # what would have been sent, and what the gate stopped
 ```
 
 ### Database setup

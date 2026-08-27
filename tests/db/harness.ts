@@ -13,7 +13,7 @@
  * which runs against a real multi-connection Postgres when DATABASE_URL is set.
  */
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { PGlite } from '@electric-sql/pglite';
@@ -23,7 +23,21 @@ import { sql } from 'drizzle-orm';
 import type { Database } from '../../src/db/client.js';
 import * as schema from '../../src/db/schema/index.js';
 
-const MIGRATION = resolve(process.cwd(), 'src/db/migrations/0000_init.sql');
+const MIGRATIONS_DIR = resolve(process.cwd(), 'src/db/migrations');
+
+/**
+ * Every migration, in order.
+ *
+ * Reading the directory rather than naming one file: hardcoding 0000 meant the
+ * whole suite broke the moment a second migration existed, and it broke as 106
+ * unrelated-looking failures rather than as one obvious message.
+ */
+function migrationSql(): string[] {
+  return readdirSync(MIGRATIONS_DIR)
+    .filter((f) => f.endsWith('.sql'))
+    .sort()
+    .map((f) => readFileSync(resolve(MIGRATIONS_DIR, f), 'utf8'));
+}
 
 export interface TestDb {
   db: Database;
@@ -36,13 +50,14 @@ export async function createTestDb(): Promise<TestDb> {
   const client = new PGlite();
   const db = drizzle(client, { schema }) as unknown as Database;
 
-  // Apply the committed migration rather than a schema push, so the tests
+  // Apply the committed migrations rather than a schema push, so the tests
   // verify the SQL we will actually run against Supabase.
-  const ddl = readFileSync(MIGRATION, 'utf8');
-  for (const statement of ddl.split('--> statement-breakpoint')) {
-    const trimmed = statement.trim();
-    if (trimmed.length === 0) continue;
-    await client.exec(trimmed);
+  for (const ddl of migrationSql()) {
+    for (const statement of ddl.split('--> statement-breakpoint')) {
+      const trimmed = statement.trim();
+      if (trimmed.length === 0) continue;
+      await client.exec(trimmed);
+    }
   }
 
   return {

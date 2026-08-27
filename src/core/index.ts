@@ -16,6 +16,8 @@ export * from './case/deadline.js';
 
 export * from './actions/types.js';
 
+export * from './guards/index.js';
+
 export * from './policy/index.js';
 
 export * from './taxonomy/codes.js';

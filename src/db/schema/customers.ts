@@ -39,7 +39,23 @@ export const customers = pgTable(
     /** BCP-47. Drives which language Claude writes the message in. */
     locale: text('locale').notNull().default('en-IN'),
 
-    // ── consent, per channel ──
+    /**
+     * When this person last transacted with this merchant.
+     *
+     * India-specific and load-bearing. A customer who just attempted a payment
+     * has a TRANSACTIONAL relationship with the merchant, which is the basis on
+     * which a utility-category message about that specific payment may be sent —
+     * DLT-registered transactional SMS, a WhatsApp utility template, a receipt
+     * email.
+     *
+     * Deliberately NOT the same as the opt-in flags below, which govern
+     * marketing. Collapsing the two would either make every recovery message
+     * unsendable (no explicit opt-in is ever collected at checkout) or quietly
+     * treat a payment as consent to be marketed at. Both are wrong.
+     */
+    transactionalBasisAt: timestamp('transactional_basis_at', { withTimezone: true }),
+
+    // ── marketing consent, per channel ──
     whatsappOptIn: boolean('whatsapp_opt_in').notNull().default(false),
     smsOptIn: boolean('sms_opt_in').notNull().default(false),
     emailOptIn: boolean('email_opt_in').notNull().default(false),

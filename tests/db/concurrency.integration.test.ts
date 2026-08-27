@@ -17,7 +17,7 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
@@ -82,14 +82,23 @@ run('concurrency (real Postgres)', () => {
       connection: { search_path: SCHEMA },
     });
 
-    const ddl = readFileSync(
-      resolve(process.cwd(), 'src/db/migrations/0000_init.sql'),
-      'utf8',
-    ).replaceAll('"public".', `"${SCHEMA}".`);
+    // Every migration, in order. Naming a single file meant the suite broke the
+    // moment a second migration existed — and broke as a hundred
+    // unrelated-looking failures rather than one obvious message.
+    const dir = resolve(process.cwd(), 'src/db/migrations');
+    const files = readdirSync(dir)
+      .filter((f) => f.endsWith('.sql'))
+      .sort();
 
-    for (const statement of ddl.split('--> statement-breakpoint')) {
-      const trimmed = statement.trim();
-      if (trimmed.length > 0) await sqlClient.unsafe(trimmed);
+    for (const file of files) {
+      const ddl = readFileSync(resolve(dir, file), 'utf8').replaceAll(
+        '"public".',
+        `"${SCHEMA}".`,
+      );
+      for (const statement of ddl.split('--> statement-breakpoint')) {
+        const trimmed = statement.trim();
+        if (trimmed.length > 0) await sqlClient.unsafe(trimmed);
+      }
     }
 
     db = drizzle(sqlClient, { schema }) as unknown as Database;
