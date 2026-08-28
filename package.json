@@ -28,7 +28,10 @@
     "seed:demo": "tsx scripts/seed-demo.ts",
     "dry-run:report": "tsx scripts/dry-run-report.ts",
     "dev:inngest": "npx inngest-cli@latest dev -u http://localhost:3000/api/inngest",
-    "replay": "tsx scripts/replay.ts"
+    "replay": "tsx scripts/replay.ts",
+    "templates:status": "tsx scripts/submit-templates.ts",
+    "templates:submit": "tsx scripts/submit-templates.ts --submit",
+    "send:test": "tsx scripts/send-test.ts"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.2",

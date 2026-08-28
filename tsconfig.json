@@ -45,6 +45,9 @@
       ],
       "@ingest/*": [
         "src/ingest/*"
+      ],
+      "@messaging/*": [
+        "src/messaging/*"
       ]
     },
     "jsx": "preserve",

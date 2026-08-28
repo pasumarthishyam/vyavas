@@ -51,6 +51,28 @@ const schema = z.object({
    * real messages to real customers.
    */
   RAZORPAY_WEBHOOK_SECRET: z.string().min(1).optional(),
+
+  // ── WhatsApp Cloud API ──
+  WHATSAPP_ACCESS_TOKEN: z.string().min(1).optional(),
+  WHATSAPP_PHONE_NUMBER_ID: z.string().min(1).optional(),
+  WHATSAPP_BUSINESS_ACCOUNT_ID: z.string().min(1).optional(),
+  /** Our own secret, echoed back to Meta during webhook verification. */
+  WHATSAPP_VERIFY_TOKEN: z.string().min(1).optional(),
+
+  // ── Email ──
+  RESEND_API_KEY: z.string().min(1).optional(),
+  /**
+   * Must be a verified domain before this reaches a real customer. Resend's
+   * shared testing sender only delivers to the account owner, which is right
+   * for building and silently wrong in production.
+   */
+  EMAIL_FROM: z.string().min(1).optional(),
+
+  // ── Claude ──
+  ANTHROPIC_API_KEY: z.string().min(1).optional(),
+
+  /** Public origin, for payment-link callbacks. */
+  APP_URL: z.string().url().optional(),
 });
 
 export type Env = z.infer<typeof schema>;
@@ -136,4 +158,45 @@ export function requireWebhookSecret(): string {
 /** True when the configured key is a test-mode key. */
 export function isTestMode(): boolean {
   return (env().RAZORPAY_API_KEY ?? '').startsWith('rzp_test_');
+}
+
+export interface WhatsAppConfig {
+  accessToken: string;
+  phoneNumberId: string;
+}
+
+export function requireWhatsAppConfig(): WhatsAppConfig {
+  return {
+    accessToken: required(
+      'WHATSAPP_ACCESS_TOKEN',
+      'Meta Business Settings > System Users > Generate token, with whatsapp_business_messaging.',
+    ),
+    phoneNumberId: required(
+      'WHATSAPP_PHONE_NUMBER_ID',
+      'App Dashboard > WhatsApp > API Setup.',
+    ),
+  };
+}
+
+export function requireWhatsAppBusinessAccountId(): string {
+  return required(
+    'WHATSAPP_BUSINESS_ACCOUNT_ID',
+    'App Dashboard > WhatsApp > API Setup. Needed to manage templates.',
+  );
+}
+
+export function requireWhatsAppVerifyToken(): string {
+  return required('WHATSAPP_VERIFY_TOKEN', 'Any random string; must match the Meta webhook config.');
+}
+
+export function requireResendKey(): string {
+  return required('RESEND_API_KEY', 'resend.com > API Keys.');
+}
+
+export function requireAnthropicKey(): string {
+  return required('ANTHROPIC_API_KEY', 'console.anthropic.com > API Keys.');
+}
+
+export function appUrl(): string {
+  return env().APP_URL ?? 'http://localhost:3000';
 }

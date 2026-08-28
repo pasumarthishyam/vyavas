@@ -30,6 +30,7 @@ export default defineConfig({
       '@db': r('./src/db'),
       '@adapters': r('./src/adapters'),
       '@ingest': r('./src/ingest'),
+      '@messaging': r('./src/messaging'),
       '@workflows': r('./src/workflows'),
     },
   },

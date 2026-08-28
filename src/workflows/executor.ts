@@ -6,26 +6,21 @@
  * is why every guard converges here rather than being scattered across the
  * workflow.
  *
- * In Stage 6 the channel layer is a no-op. Every rung is planned, gated,
- * recorded and then deliberately not sent. That is not a placeholder — it is
- * the product: a merchant watches two weeks of their real traffic and sees
- * exactly what would have been said, to whom, and when, before granting write
- * access to anything.
+ * Messages are real from Stage 7 on. Two reasons a rung still does not send,
+ * and they are NOT the same thing:
  *
- * Three suppression reasons, and they are NOT the same thing:
- *
- *   holdout    a real control group. Runs the full ladder, sends nothing, and
- *              is the only honest way to know what recovery was worth.
+ *   holdout    a real control group. Runs the identical ladder through the
+ *              identical gate, sends nothing, and is the only honest way to
+ *              know what the treatment was worth.
  *   dry_run    the merchant has not turned execution on yet.
- *   not_built  the channel does not exist yet (all of Stage 6).
  *
- * Collapsing them would make the incrementality report meaningless, because a
- * dry-run case is not a control — it is a case we never treated at all.
+ * Collapsing them would make the incrementality report meaningless: a dry-run
+ * case is not a control, it is a case nobody was ever treated in.
  */
 
 import { eq, sql } from 'drizzle-orm';
 
-import { type Action, idempotencyKey } from '../core/actions/types.js';
+import { type Action, type Channel, idempotencyKey } from '../core/actions/types.js';
 import { effectiveRails } from '../core/policy/resolve.js';
 import { evaluatePreconditions, selectChannel } from '../core/guards/preconditions.js';
 import type { GateResult } from '../core/guards/preconditions.js';
@@ -36,10 +31,15 @@ import type { AlternateRail } from '../core/case/types.js';
 import type { Database } from '../db/client.js';
 import { caseActions, recoveryCases } from '../db/schema/cases.js';
 import { appendEvent } from '../db/repos/cases.js';
-import { recordMessageIfPermitted } from '../db/repos/messages.js';
+import type { Paise } from '../core/money.js';
+import { compose } from '../messaging/compose.js';
+import { sendMessage, type SendChannels, type SendOutcome } from '../messaging/send.js';
+import { getChannels } from './channels.js';
+import { ensurePaymentLink } from './payment-link.js';
+import type { RazorpayClient } from '../adapters/razorpay/client.js';
 import type { GatheredFacts } from './facts.js';
 
-export type SuppressionReason = 'holdout' | 'dry_run' | 'not_built';
+export type SuppressionReason = 'holdout' | 'dry_run';
 
 export interface ExecuteRungInput {
   db: Database;
@@ -53,6 +53,10 @@ export interface ExecuteRungInput {
   /** Rails the diagnosis permits. Used to filter what a nudge may suggest. */
   diagnosisRails: readonly AlternateRail[];
   sameInstrumentRetry: boolean;
+  /** Injected by tests; production resolves from env. */
+  channels?: SendChannels;
+  /** Omitted in tests that do not exercise link creation. */
+  razorpay?: RazorpayClient;
 }
 
 export interface RungOutcome {
@@ -60,7 +64,7 @@ export interface RungOutcome {
   gate: GateResult;
   suppressedReason: SuppressionReason | null;
   action: Action | null;
-  channel: string | null;
+  channel: Channel | null;
   retryAt: Date | null;
   note: string;
 }
@@ -139,8 +143,8 @@ export async function executeRung(input: ExecuteRungInput): Promise<RungOutcome>
   //
   // Ordered by precedence: a holdout case is a holdout case even once the
   // channels are built and the merchant has turned execution on.
-  const suppressedReason: SuppressionReason =
-    cohort === 'holdout' ? 'holdout' : gathered.dryRun ? 'dry_run' : 'not_built';
+  const suppressedReason: SuppressionReason | null =
+    cohort === 'holdout' ? 'holdout' : gathered.dryRun ? 'dry_run' : null;
 
   // ── record the action ──
   //
@@ -153,7 +157,7 @@ export async function executeRung(input: ExecuteRungInput): Promise<RungOutcome>
       merchantId,
       rung: rungIndex,
       kind: action.kind,
-      status: 'suppressed',
+      status: suppressedReason ? 'suppressed' : 'executed',
       idempotencyKey: key,
       skipReason: suppressedReason,
       params: action as never,
@@ -175,41 +179,126 @@ export async function executeRung(input: ExecuteRungInput): Promise<RungOutcome>
     };
   }
 
-  // ── the message ledger ──
+  // ── compose and send ──
   //
-  // Written even when suppressed, and through the SAME locked path a real send
-  // would take. That is what makes the two cohorts comparable: a holdout row
-  // records that we got as far as being permitted to send.
-  if (channel && (action.kind === 'nudge' || action.kind === 'send_pre_debit_notice')) {
-    if (gathered.customerId) {
-      const decision = await recordMessageIfPermitted(
-        db,
-        {
-          merchantId,
-          customerId: gathered.customerId,
-          caseId,
-          rung: rungIndex,
-          channel: channel as 'whatsapp' | 'sms' | 'email' | 'in_app',
-          intent: action.kind === 'nudge' ? action.intent : 'pre_debit_notice',
-          idempotencyKey: key,
-          suppressedReason,
-        },
-        gathered.facts.frequencyCap,
-      );
+  // Composition is pure and can refuse: no approved template for the intent, or
+  // no payment link where the copy needs one. A refusal is a SKIP, never a
+  // partial send — "Pay here: " with nothing after it is worse than silence.
+  let sendOutcome: SendOutcome | null = null;
 
-      if (!decision.permitted) {
-        return {
-          disposition: 'skipped',
-          gate,
-          suppressedReason,
-          action,
-          channel,
-          retryAt: null,
-          note: `message ledger refused: ${decision.reason}`,
-        };
-      }
+  if (channel && (action.kind === 'nudge' || action.kind === 'send_pre_debit_notice')) {
+    if (!gathered.customerId) {
+      return {
+        disposition: 'skipped',
+        gate,
+        suppressedReason,
+        action,
+        channel,
+        retryAt: null,
+        note: 'no customer record to message',
+      };
     }
 
+    // Create the link lazily, on the first rung that needs one. Most cases
+    // never reach a rung, so creating one per failure would litter the
+    // merchant dashboard with links nobody opens.
+    let paymentLinkUrl = gathered.paymentLinkUrl;
+    const needsLink = action.kind === 'nudge' && action.attachPaymentLink;
+
+    if (needsLink && !paymentLinkUrl && input.razorpay) {
+      const link = await ensurePaymentLink({
+        db,
+        razorpay: input.razorpay,
+        caseId,
+        merchantId,
+        merchantName: gathered.merchantName,
+        amountPaise: gathered.amountPaise,
+        customerName: gathered.customerName,
+        customerPhone: gathered.customerPhone,
+        customerEmail: gathered.customerEmail,
+        expiresAt: gathered.facts.deadlinePassed ? null : null,
+        now: gathered.facts.now,
+      });
+      if (link.ok) paymentLinkUrl = link.url;
+    }
+
+    const composed = compose({
+      intent: action.kind === 'nudge' ? action.intent : 'pre_debit_notice',
+      locale: gathered.customerLocale,
+      customerName: gathered.customerName,
+      merchantName: gathered.merchantName,
+      amountPaise: gathered.amountPaise as Paise,
+      paymentLink: paymentLinkUrl,
+      debitAt: action.kind === 'send_pre_debit_notice' ? action.debitAt : null,
+    });
+
+    if (!composed.ok) {
+      await appendEvent(db, {
+        caseId,
+        merchantId,
+        kind: 'rung_uncomposable',
+        reason: composed.reason,
+        actor: 'workflow',
+        payload: { rung: rungIndex, detail: composed.detail },
+      });
+      return {
+        disposition: 'skipped',
+        gate,
+        suppressedReason,
+        action,
+        channel,
+        retryAt: null,
+        note: `could not compose: ${composed.detail}`,
+      };
+    }
+
+    // One path for treatment and holdout alike. The suppressed reason decides
+    // whether the provider is called; everything before that is identical, so
+    // the two cohorts stay comparable.
+    sendOutcome = await sendMessage({
+      db,
+      merchantId,
+      customerId: gathered.customerId,
+      caseId,
+      rung: rungIndex,
+      channel,
+      message: composed.message,
+      merchantName: gathered.merchantName,
+      phone: gathered.customerPhone,
+      email: gathered.customerEmail,
+      frequencyCap: gathered.facts.frequencyCap,
+      idempotencyKey: key,
+      suppressedReason,
+      channels: input.channels ?? getChannels(),
+    });
+
+    if (sendOutcome.status === 'refused') {
+      return {
+        disposition: 'skipped',
+        gate,
+        suppressedReason,
+        action,
+        channel,
+        retryAt: null,
+        note: `message ledger refused: ${sendOutcome.reason}`,
+      };
+    }
+
+    if (sendOutcome.status === 'no_channel') {
+      return {
+        disposition: 'skipped',
+        gate,
+        suppressedReason,
+        action,
+        channel,
+        retryAt: null,
+        note: sendOutcome.detail,
+      };
+    }
+
+    // A failed send still counted against the cap — the ledger row stays. The
+    // alternative, releasing the slot, turns one provider hiccup into two
+    // messages for one rung.
     await db
       .update(recoveryCases)
       .set({ messagesSent: sql`${recoveryCases.messagesSent} + 1`, updatedAt: sql`now()` })
@@ -254,7 +343,7 @@ export async function executeRung(input: ExecuteRungInput): Promise<RungOutcome>
  * handle on the Razorpay API. Bounded autonomy as a type rather than as a
  * promise.
  */
-function buildAction(input: ExecuteRungInput): { action: Action; channel: string | null } | null {
+function buildAction(input: ExecuteRungInput): { action: Action; channel: Channel | null } | null {
   const { rung, rungIndex, gathered, diagnosisRails, sameInstrumentRetry } = input;
 
   switch (rung.action) {

@@ -58,8 +58,8 @@ consequences, and they are the point:
 | 4 | Razorpay adapter + Ingest | ✅ done |
 | 5 | Read-only Revenue-at-Risk dashboard → **ship to partners** | ✅ done |
 | 6 | Execute (Inngest), dry-run only | ✅ done |
-| 7 | Channels — WhatsApp / SMS / email, live | next |
-| 8 | Measure + Partner OAuth | |
+| 7 | Channels — WhatsApp + email, live | ✅ done |
+| 8 | Measure + Partner OAuth | next |
 
 ---
 
@@ -90,6 +90,10 @@ npm run dev:inngest            # local Inngest dev server (run alongside npm run
 npm run replay                 # what the CURRENT policy table would do to real cases
 npm run replay -- --case=<id>  # one case, rung by rung, with the gate reasoning
 npm run dry-run:report         # what would have been sent, and what the gate stopped
+
+npm run templates:status       # Meta review status for the 9 templates
+npm run templates:submit       # create any that are missing
+npm run send:test -- --to=91XXXXXXXXXX   # one real message, end to end
 ```
 
 ### Database setup

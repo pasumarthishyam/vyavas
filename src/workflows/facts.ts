@@ -42,9 +42,21 @@ export interface GatheredFacts {
   facts: PreconditionFacts;
   /** Present so the executor can decide, and so the ledger can record, the source. */
   orderPaidCheckedRemotely: boolean;
-  customerId: string | null;
   merchantName: string;
   dryRun: boolean;
+
+  /** What composition and the send path need. Gathered once, here. */
+  customerId: string | null;
+  customerName: string | null;
+  customerPhone: string | null;
+  customerEmail: string | null;
+  customerLocale: string | null;
+
+  amountPaise: number;
+  rzpOrderId: string | null;
+  rzpPaymentLinkId: string | null;
+  /** Set once the ladder has created a link; composition refuses to send without one. */
+  paymentLinkUrl: string | null;
 }
 
 export async function gatherFacts(opts: GatherOptions): Promise<GatheredFacts | null> {
@@ -164,8 +176,18 @@ export async function gatherFacts(opts: GatherOptions): Promise<GatheredFacts | 
   return {
     facts,
     orderPaidCheckedRemotely: checkedRemotely,
-    customerId: c.customerId,
     merchantName: m.name,
+
+    customerId: c.customerId,
+    customerName: cust?.name ?? null,
+    customerPhone: cust?.phone ?? null,
+    customerEmail: cust?.email ?? null,
+    customerLocale: cust?.locale ?? null,
+
+    amountPaise: Number(c.amountAtRiskPaise),
+    rzpOrderId: c.rzpOrderId,
+    rzpPaymentLinkId: c.rzpPaymentLinkId,
+    paymentLinkUrl: c.rzpPaymentLinkUrl,
     // Dry-run plans everything and sends nothing. Distinct from the kill switch:
     // execution_enabled=false stops the ladder entirely, dry_run lets it run and
     // records what it would have done.

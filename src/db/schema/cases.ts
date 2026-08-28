@@ -66,6 +66,14 @@ export const recoveryCases = pgTable(
     rzpInvoiceId: text('rzp_invoice_id'),
     rzpSubscriptionId: text('rzp_subscription_id'),
     rzpPaymentLinkId: text('rzp_payment_link_id'),
+    /**
+     * The short URL, stored rather than re-fetched.
+     *
+     * A ladder consults this on every rung; fetching the link from Razorpay
+     * each time would add a round trip to the one code path that must stay
+     * fast, for a value that never changes once created.
+     */
+    rzpPaymentLinkUrl: text('rzp_payment_link_url'),
 
     // ── the diagnosis tuple, never collapsed ──
     errorCode: text('error_code'),

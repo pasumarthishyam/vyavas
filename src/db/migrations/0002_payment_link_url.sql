@@ -1,0 +1,1 @@
+ALTER TABLE "recovery_cases" ADD COLUMN "rzp_payment_link_url" text;
