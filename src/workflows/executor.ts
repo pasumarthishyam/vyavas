@@ -325,14 +325,37 @@ export async function executeRung(input: ExecuteRungInput): Promise<RungOutcome>
     },
   });
 
+  // `suppressed` and `executed` are genuinely different outcomes and the
+  // caller acts on them differently — the dry-run report counts one, the
+  // incrementality ledger counts the other. Reporting a real send as
+  // "suppressed (null)" made a working send look like a bug.
+  if (suppressedReason) {
+    return {
+      disposition: 'suppressed',
+      gate,
+      suppressedReason,
+      action,
+      channel,
+      retryAt: null,
+      note: `planned and recorded; not sent (${suppressedReason})`,
+    };
+  }
+
+  const note =
+    sendOutcome?.status === 'failed'
+      ? `send failed: ${sendOutcome.failure} — ${sendOutcome.detail}`
+      : channel
+        ? `sent via ${channel}`
+        : 'executed';
+
   return {
-    disposition: 'suppressed',
+    disposition: 'executed',
     gate,
-    suppressedReason,
+    suppressedReason: null,
     action,
     channel,
     retryAt: null,
-    note: `planned and recorded; not sent (${suppressedReason})`,
+    note,
   };
 }
 

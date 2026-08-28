@@ -120,7 +120,10 @@ describe('sending, for real', () => {
     const wa = fakeWhatsApp();
     const r = await fire({ channels: { whatsapp: wa.client } });
 
-    expect(r.disposition).toBe('suppressed'); // outcome name; the send happened
+    // `executed` means it really went out; `suppressed` means it deliberately
+    // did not. The two are counted by different reports, so they are distinct
+    // dispositions rather than one with a flag.
+    expect(r.disposition).toBe('executed');
     expect(wa.sent).toHaveLength(1);
     expect(wa.sent[0]!.templateName).toBe('vyavas_switch_method_en');
     expect(wa.sent[0]!.language).toBe('en');
@@ -219,7 +222,8 @@ describe('provider failures', () => {
     });
 
     const r = await fire({ channels: { whatsapp: wa.client } });
-    expect(r.disposition).toBe('suppressed');
+    expect(r.disposition).toBe('executed');
+    expect(r.note).toContain('send failed');
 
     // The next rung should fall through to email rather than fail identically.
     const [cust] = await t.db
@@ -311,7 +315,7 @@ describe('idempotency', () => {
     const first = await fire({ channels: { whatsapp: wa.client } });
     const second = await fire({ channels: { whatsapp: wa.client } });
 
-    expect(first.disposition).toBe('suppressed');
+    expect(first.disposition).toBe('executed');
     expect(second.disposition).toBe('skipped');
     expect(second.note).toContain('replay');
 
