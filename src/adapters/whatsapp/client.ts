@@ -92,6 +92,22 @@ function classify(code: number | undefined, message: string): {
 
 export interface WhatsAppClient {
   sendTemplate(input: SendTemplateInput): Promise<SendResult>;
+  /**
+   * Free-form text. Valid ONLY inside the 24-hour customer service window —
+   * the period after the customer messages us first.
+   *
+   * Not usable for recovery: a customer who abandoned a payment has not
+   * written to us, so there is no window and Meta returns 131047. It exists
+   * for two real cases: replying to an inbound message (a customer who says
+   * "already paid" deserves an answer, not a template), and reading the actual
+   * copy on a real phone while templates are still in review.
+   */
+  sendText(input: SendTextInput): Promise<SendResult>;
+}
+
+export interface SendTextInput {
+  to: string;
+  text: string;
 }
 
 export interface SendTemplateInput {
@@ -121,7 +137,64 @@ export function createWhatsAppClient(opts: WhatsAppClientOptions = {}): WhatsApp
   const doFetch = opts.fetchImpl ?? fetch;
   const timeoutMs = opts.timeoutMs ?? 15_000;
 
+  /** Both send paths differ only in the body they POST. */
+  async function post(to: string, payload: Record<string, unknown>): Promise<SendResult> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const res = await doFetch(`${base}/${cfg.phoneNumberId}/messages`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${cfg.accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          messaging_product: 'whatsapp',
+          recipient_type: 'individual',
+          to,
+          ...payload,
+        }),
+        signal: controller.signal,
+      });
+
+      const json = (await res.json()) as {
+        messages?: { id: string }[];
+        error?: { code?: number; message?: string; error_data?: { details?: string } };
+      };
+
+      if (res.ok && json.messages?.[0]?.id) {
+        return {
+          ok: true,
+          messageId: json.messages[0].id,
+          failure: null,
+          detail: null,
+          retryable: false,
+        };
+      }
+
+      const err = json.error ?? {};
+      const detail = err.error_data?.details ?? err.message ?? `HTTP ${res.status}`;
+      const { failure, retryable } = classify(err.code, detail);
+      return { ok: false, messageId: null, failure, detail, retryable };
+    } catch (e) {
+      return {
+        ok: false,
+        messageId: null,
+        failure: 'transient',
+        detail: e instanceof Error ? e.message : String(e),
+        retryable: true,
+      };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   return {
+    async sendText(input: SendTextInput): Promise<SendResult> {
+      return post(input.to, { type: 'text', text: { preview_url: true, body: input.text } });
+    },
+
     async sendTemplate(input: SendTemplateInput): Promise<SendResult> {
       const body = {
         messaging_product: 'whatsapp',

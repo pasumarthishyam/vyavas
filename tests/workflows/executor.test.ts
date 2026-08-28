@@ -46,6 +46,13 @@ function fakeWhatsApp(result?: Partial<SendResult>) {
           ...result,
         };
       },
+      // A ladder must never send free-form text: the customer abandoned a
+      // payment, they did not write to us, so there is no 24-hour window and
+      // Meta would reject it. Present to satisfy the interface; reaching it
+      // is a bug, so it throws rather than quietly succeeding.
+      async sendText(): Promise<SendResult> {
+        throw new Error('a ladder must never send free-form text');
+      },
     },
   };
 }
