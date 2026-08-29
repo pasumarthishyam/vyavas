@@ -10,7 +10,7 @@ const ITEMS = [
   { href: '/cases', label: 'Cases', icon: CasesIcon },
 ];
 
-export function Nav() {
+export function Nav({ switcher }: { switcher?: React.ReactNode }) {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState<boolean | null>(null);
 
@@ -50,6 +50,8 @@ export function Nav() {
         </button>
       </div>
 
+      {switcher && <div className="sidebar-switcher">{switcher}</div>}
+
       <nav className="nav">
         {ITEMS.map((item) => {
           // usePathname() can render null on the first pass of a cold, dynamic
@@ -77,7 +79,7 @@ export function Nav() {
       <div className="sidebar-foot">
         <ThemeToggle collapsed={isCollapsed} />
         <div className="sidebar-note">
-          Read-only. No messages are sent and no money moves.
+          Every send is gated, logged and reversible.
         </div>
       </div>
     </aside>

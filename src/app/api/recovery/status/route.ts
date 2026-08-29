@@ -7,8 +7,8 @@ import {
   getRecoverableCases,
   getRecoverySummary,
 } from '../../../../db/queries/recovery';
+import { currentMerchantId } from '../../../../lib/merchant-context';
 import { fireDueFollowUps } from '../../../../messaging/recovery-run';
-import { env } from '../../../../lib/env';
 
 /**
  * Live state for the console, and the thing that fires due follow-ups.
@@ -23,7 +23,9 @@ export const dynamic = 'force-dynamic';
 
 export async function GET(): Promise<NextResponse> {
   const db = getDb();
-  const merchant = await getConsoleMerchant(db);
+  // The account the console is pointed at, never "the first one".
+  const merchantId = await currentMerchantId(db);
+  const merchant = merchantId ? await getConsoleMerchant(db, merchantId) : null;
   if (!merchant) {
     return NextResponse.json({ ok: false, reason: 'no merchant' }, { status: 404 });
   }
@@ -38,17 +40,18 @@ export async function GET(): Promise<NextResponse> {
     getRecoverySummary(db, merchant.id),
   ]);
 
-  const e = env();
 
   return NextResponse.json({
     ok: true,
     merchant,
-    // Where messages will ACTUALLY land. Without this the console can say
-    // "sending is on" while every WhatsApp message is quietly diverted — or,
-    // worse, while it is not and a real customer is about to be messaged.
+    // Where messages will ACTUALLY land — read from the merchant's own routing
+    // columns, the same ones the senders read. Reading it from environment
+    // variables meant the banner could report a diversion the sender was not
+    // applying, which is worse than showing nothing at all.
     routing: {
-      whatsappRedirectTo: e.WHATSAPP_REDIRECT_TO ?? null,
-      emailFrom: e.EMAIL_FROM ?? null,
+      whatsappRedirectTo: merchant.whatsappRedirectTo,
+      emailRedirectTo: merchant.emailRedirectTo,
+      emailFrom: merchant.emailFrom,
     },
     cases,
     activity,

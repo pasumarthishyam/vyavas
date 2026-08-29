@@ -27,6 +27,7 @@ import { transitionCase } from '../../db/repos/cases.js';
 import { getDb } from '../../db/client.js';
 import { gatherFacts } from '../facts.js';
 import { executeRung } from '../executor.js';
+import { razorpayForMerchant } from '../merchant-clients.js';
 import { inngest, type CaseDiagnosedData } from '../client.js';
 import { loadCaseForRun } from '../case-run.js';
 
@@ -112,6 +113,12 @@ export const runLadder = inngest.createFunction(
         const gathered = await gatherFacts({ db, caseId, now: new Date() });
         if (!gathered) return { disposition: 'aborted' as const, note: 'case vanished' };
 
+        // This merchant's own account. Resolved here rather than inside the
+        // executor: the workflow is where the merchant is unambiguous, and an
+        // absent credential must mean "no link", never "use whatever key the
+        // environment happens to hold".
+        const razorpay = await razorpayForMerchant(db, merchantId);
+
         const r = await executeRung({
           db,
           caseId,
@@ -123,6 +130,7 @@ export const runLadder = inngest.createFunction(
           cohort: data.cohort,
           diagnosisRails: detectedAt.rails,
           sameInstrumentRetry: detectedAt.retry,
+          ...(razorpay ? { razorpay } : {}),
         });
 
         return {
@@ -153,6 +161,7 @@ export const runLadder = inngest.createFunction(
         const retry = await step.run(`rung-${i}-retry`, async () => {
           const gathered = await gatherFacts({ db, caseId, now: new Date() });
           if (!gathered) return { disposition: 'aborted' as const, note: 'case vanished' };
+          const razorpay = await razorpayForMerchant(db, merchantId);
           const r = await executeRung({
             db,
             caseId,
@@ -164,6 +173,7 @@ export const runLadder = inngest.createFunction(
             cohort: data.cohort,
             diagnosisRails: detectedAt.rails,
             sameInstrumentRetry: detectedAt.retry,
+            ...(razorpay ? { razorpay } : {}),
           });
           return { disposition: r.disposition, note: r.note };
         });

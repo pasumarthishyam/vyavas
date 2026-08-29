@@ -54,6 +54,29 @@ export const merchants = pgTable(
     quietHoursStart: smallint('quiet_hours_start').notNull().default(21),
     quietHoursEnd: smallint('quiet_hours_end').notNull().default(8),
 
+    /**
+     * Hard floor between two touches to one person, in minutes.
+     *
+     * The frequency cap counts messages over a rolling 24h and cannot express
+     * "not twice in five minutes" — under a cap of 2, a second message ninety
+     * seconds after the first is permitted. This is that missing floor, and it
+     * is deterministic on purpose: an agent that is right 99% of the time still
+     * double-messages someone once every hundred runs.
+     */
+    minGapMinutes: smallint('min_gap_minutes').notNull().default(360),
+
+    /**
+     * How long after a failure the customer is assumed to still be on the page.
+     *
+     * A first touch inside this window is a RESPONSE to something the person
+     * did seconds ago, not an outbound campaign, so it is exempt from quiet
+     * hours. Someone who tapped Pay at 22:47 and watched it fail is awake,
+     * holding their phone, looking at an error; telling them "try UPI" is help.
+     * Waiting until 08:00 loses the sale. Rung 0 only, and only inside this
+     * window — every later rung obeys quiet hours normally.
+     */
+    liveCustomerWindowMinutes: smallint('live_customer_window_minutes').notNull().default(15),
+
     /** Daily ceiling on customer messages for the whole account. Paise-free integer. */
     dailyMessageBudget: integer('daily_message_budget').notNull().default(1000),
     /** Ceiling on money the agent may re-present per day, in paise. */
@@ -63,6 +86,29 @@ export const merchants = pgTable(
 
     /** Commission on proven-incremental recovery, in basis points. */
     commissionBasisPoints: integer('commission_basis_points').notNull().default(1500),
+
+    // ── email, per merchant ──
+    //
+    // Encrypted like every other stored credential. A merchant sends as
+    // themselves from their own verified domain, so the key and the From
+    // address travel together and neither belongs in a global env var.
+    resendApiKeyEnc: text('resend_api_key_enc'),
+    emailFrom: text('email_from'),
+
+    // ── where messages ACTUALLY land ──
+    //
+    // NULL means the real recipient. Set means every message on that channel
+    // goes here instead, whatever the case says — the intended recipient is
+    // still recorded in `message_log`, so the ledger stays truthful about who
+    // the message was FOR.
+    //
+    // This is a merchant property rather than an environment flag on purpose.
+    // The previous design refused to divert whenever NODE_ENV was 'production',
+    // which is correct only if production means real customers — and it stops
+    // being correct the moment a sandbox merchant runs on the same deployment
+    // as a live one.
+    whatsappRedirectTo: text('whatsapp_redirect_to'),
+    emailRedirectTo: text('email_redirect_to'),
 
     settings: jsonb('settings').notNull().default(sql`'{}'::jsonb`),
 

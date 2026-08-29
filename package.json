@@ -33,7 +33,8 @@
     "templates:submit": "tsx scripts/submit-templates.ts --submit",
     "send:test": "tsx scripts/send-test.ts",
     "e2e": "tsx scripts/e2e.ts",
-    "backfill": "tsx scripts/backfill.ts"
+    "backfill": "tsx scripts/backfill.ts",
+    "merchant": "tsx scripts/merchant.ts"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.2",

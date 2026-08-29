@@ -32,7 +32,7 @@ export const sweepDeadlines = inngest.createFunction(
     const db = getDb();
 
     return step.run('close-expired', async () => {
-      const expired = await claimExpiredCases(db, 200);
+      const expired = await claimExpiredCases(db, 50);
       const closed: string[] = [];
 
       for (const c of expired) {

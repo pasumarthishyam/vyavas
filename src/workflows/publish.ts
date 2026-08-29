@@ -50,3 +50,15 @@ export async function publishSweepRequested(merchantId?: string): Promise<Publis
   await inngest.send({ name: 'sweep/requested', data: { merchantId: merchantId ?? null } });
   return { published: true };
 }
+
+/**
+ * The publisher the ingest pipeline is handed in production.
+ *
+ * Bundles the two events ingest can raise behind the `WorkflowPublisher`
+ * interface, so `pipeline.ts` never imports Inngest and the ingest tests can
+ * keep running with no workflow engine at all.
+ */
+export const workflowPublisher = {
+  caseDiagnosed: (data: CaseDiagnosedData) => publishCaseDiagnosed(data),
+  caseResolved: (data: CaseResolvedData) => publishCaseResolved(data),
+};

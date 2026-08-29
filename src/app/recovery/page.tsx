@@ -5,6 +5,7 @@ import {
   getRecoverableCases,
   getRecoverySummary,
 } from '../../db/queries/recovery';
+import { selectMerchant } from '../../lib/merchant-context';
 import { RecoveryConsole } from '../../components/recovery-console';
 import { Empty } from '../../components/charts';
 
@@ -20,7 +21,8 @@ export const dynamic = 'force-dynamic';
 
 export default async function RecoveryPage() {
   const db = getDb();
-  const merchant = await getConsoleMerchant(db);
+  const selection = await selectMerchant(db);
+  const merchant = selection ? await getConsoleMerchant(db, selection.current.id) : null;
 
   if (!merchant) {
     return (

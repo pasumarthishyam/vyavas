@@ -33,9 +33,8 @@ import type { Database } from '../db/client.js';
 import { caseActions, recoveryCases } from '../db/schema/cases.js';
 import { appendEvent } from '../db/repos/cases.js';
 import { gatherFacts } from '../workflows/facts.js';
-import { getChannels } from '../workflows/channels.js';
+import { channelsForMerchant, razorpayForMerchant } from '../workflows/merchant-clients.js';
 import { ensurePaymentLink } from '../workflows/payment-link.js';
-import { createRazorpayClient } from '../adapters/razorpay/client.js';
 import { compose } from './compose.js';
 import { sendMessage, type SendOutcome } from './send.js';
 
@@ -121,9 +120,22 @@ export async function startRecovery(db: Database, caseId: string): Promise<Start
   // render with a blank where the link goes.
   let link = gathered.paymentLinkUrl;
   if (!link) {
+    // This merchant's own Razorpay account. Refused rather than falling back to
+    // env: a link created on the wrong account bills the wrong business.
+    const rzp = await razorpayForMerchant(db, row.merchantId);
+    if (!rzp) {
+      return {
+        ok: false,
+        caseId,
+        steps: [],
+        followUpAt: null,
+        reason: 'no Razorpay credentials stored for this merchant — run npm run merchant:connect',
+      };
+    }
+
     const made = await ensurePaymentLink({
       db,
-      razorpay: createRazorpayClient(),
+      razorpay: rzp,
       caseId,
       merchantId: row.merchantId,
       merchantName: gathered.merchantName,
@@ -342,7 +354,7 @@ async function deliver(db: Database, input: DeliverInput): Promise<StepResult> {
     // Holdout and dry-run still suppress. The console can start a recovery;
     // it cannot override the merchant's own switch.
     suppressedReason: gathered.dryRun ? 'dry_run' : null,
-    channels: getChannels(),
+    channels: await channelsForMerchant(db, input.merchantId),
   });
 
   switch (outcome.status) {

@@ -13,10 +13,11 @@ import { sweepDeadlines } from '../../../workflows/functions/sweep-deadlines';
  */
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-// Ladder steps are short (a gate check and a write), but the sweep can walk 200
-// cases. Well under Vercel's ceiling; raised so a slow round trip to Mumbai
-// cannot truncate a run mid-step.
-export const maxDuration = 300;
+// Ladder steps are short (a gate check and a write). 60s is the ceiling every
+// Vercel plan allows, Hobby included — 300 is only available higher up, and a
+// value the plan refuses fails the deployment rather than degrading. The sweep
+// walks a small enough batch to finish well inside this.
+export const maxDuration = 60;
 
 export const { GET, POST, PUT } = serve({
   client: inngest,

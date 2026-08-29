@@ -24,8 +24,19 @@ import type { SendMode } from '../app/api/recovery/execution/route';
  * harder to find, and the button is the whole point.
  */
 
+/**
+ * Where messages land, read from the merchant's own routing columns — the same
+ * values the senders read.
+ *
+ * It used to be read from environment variables, which meant the banner could
+ * report "diverted" while the sender was doing the opposite: the diversion was
+ * disabled under NODE_ENV=production, but the banner did not know that, so the
+ * one surface whose job is to tell you where messages go was confidently wrong
+ * in exactly the situation that mattered.
+ */
 interface Routing {
   whatsappRedirectTo: string | null;
+  emailRedirectTo: string | null;
   emailFrom: string | null;
 }
 
@@ -232,28 +243,49 @@ function maskPhone(phone: string): string {
 
 function Routing({ routing, live }: { routing?: Routing; live: boolean }) {
   if (!routing) return null;
-  const diverted = Boolean(routing.whatsappRedirectTo);
+
+  const waDiverted = Boolean(routing.whatsappRedirectTo);
+  const mailDiverted = Boolean(routing.emailRedirectTo);
+  // Critical only when something can actually reach a stranger right now.
+  const reachesRealPeople = live && (!waDiverted || !mailDiverted);
 
   return (
-    <div className={`notice${live && !diverted ? ' notice-critical' : ''}`}>
-      {live && !diverted ? <WarnIcon /> : <InfoIcon />}
+    <div className={`notice${reachesRealPeople ? ' notice-critical' : ''}`}>
+      {reachesRealPeople ? <WarnIcon /> : <InfoIcon />}
       <span>
         <strong style={{ fontWeight: 550 }}>WhatsApp</strong>{' '}
-        {diverted ? (
+        {waDiverted ? (
           <>
-            diverted to <span className="mono">+{maskPhone(routing.whatsappRedirectTo!)}</span> — no
-            customer receives it.
+            → <span className="mono">+{maskPhone(routing.whatsappRedirectTo!)}</span>, never the
+            customer.
           </>
         ) : (
-          <>goes to the <strong style={{ fontWeight: 550 }}>real customer number</strong>. Set{' '}
-          <span className="mono">WHATSAPP_REDIRECT_TO</span> in .env.local to divert it.</>
+          <>
+            → the <strong style={{ fontWeight: 550 }}>real customer number</strong>.
+          </>
         )}
         {' · '}
         <strong style={{ fontWeight: 550 }}>Email</strong>{' '}
-        {routing.emailFrom ? (
-          <>sends from <span className="mono">{routing.emailFrom}</span> to the real address.</>
+        {mailDiverted ? (
+          <>
+            → <span className="mono">{routing.emailRedirectTo}</span>, never the customer.
+          </>
         ) : (
-          <>uses the shared test sender, which only reaches your own inbox.</>
+          <>
+            → the <strong style={{ fontWeight: 550 }}>real customer address</strong>
+            {routing.emailFrom ? (
+              <>
+                {' '}from <span className="mono">{routing.emailFrom}</span>
+              </>
+            ) : null}
+            .
+          </>
+        )}
+        {reachesRealPeople && (
+          <>
+            {' '}
+            <strong style={{ fontWeight: 550 }}>Sending is live — real people will receive this.</strong>
+          </>
         )}
       </span>
     </div>

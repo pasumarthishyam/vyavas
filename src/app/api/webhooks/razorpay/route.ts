@@ -1,83 +1,54 @@
 import { NextResponse } from 'next/server';
-import { eq, sql } from 'drizzle-orm';
+import { sql } from 'drizzle-orm';
 
 import { getDb } from '../../../../db/client';
 import { merchants } from '../../../../db/schema/tenancy';
-import { razorpayConnections } from '../../../../db/schema/tenancy';
-import { handleWebhookRequest, type MerchantSettings } from '../../../../ingest/webhook-handler';
-import { requireWebhookSecret } from '../../../../lib/env';
 
 /**
- * The Razorpay webhook endpoint.
+ * The old single-merchant webhook URL.
  *
- * Five lines of transport around `handleWebhookRequest`, which is where the
- * whole contract lives and where it is tested. Deliberately so: signature
- * verification, dedupe and response semantics are the part that must not depend
- * on a framework, and the part that must be provable without a server running.
+ * Superseded by `/api/webhooks/razorpay/[slug]`, because the merchant a
+ * delivery belongs to has to be known BEFORE the signature can be verified,
+ * and the only trustworthy place to put that is the URL.
  *
- * `request.text()` — NOT `request.json()`. The signature is computed over the
- * exact bytes Razorpay sent, and parsing then re-serialising changes key order
- * and whitespace, so the HMAC no longer matches.
+ * Kept rather than deleted, and kept LOUD rather than quietly accepting: if
+ * this URL is still configured in a Razorpay dashboard somewhere, the failure
+ * has to be visible. A 404 would look like a deploy problem, and silently
+ * accepting would mean every delivery is dropped as unattributable while
+ * Razorpay reports 200 and the merchant sees no cases at all — which is the
+ * worst of the three outcomes, because nothing anywhere says it is broken.
  */
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(request: Request): Promise<NextResponse> {
-  let secret: string;
-  try {
-    secret = requireWebhookSecret();
-  } catch {
-    // Refuse to accept anything rather than accept it unverified. An endpoint
-    // that skips verification because a secret is missing is an open endpoint.
-    return NextResponse.json(
-      { ok: false, reason: 'webhook_secret_not_configured' },
-      { status: 503 },
-    );
-  }
-
-  const rawBody = await request.text();
-
-  const headers: Record<string, string> = {};
-  request.headers.forEach((value, key) => {
-    headers[key] = value;
-  });
-
+async function guidance() {
   const db = getDb();
+  const rows = await db
+    .select({ slug: merchants.slug, name: merchants.name })
+    .from(merchants)
+    .where(sql`deleted_at is null`)
+    .orderBy(merchants.createdAt);
 
-  const result = await handleWebhookRequest(rawBody, headers, {
-    db,
-    webhookSecret: secret,
-    now: () => new Date(),
-    resolveMerchant: async (accountId): Promise<MerchantSettings | null> => {
-      const settings = (row: typeof merchants.$inferSelect): MerchantSettings => ({
-        merchantId: row.id,
-        holdoutBasisPoints: row.holdoutBasisPoints,
-        holdoutEnabled: row.holdoutEnabled,
-      });
-
-      if (accountId) {
-        const joined = await db
-          .select({ m: merchants })
-          .from(razorpayConnections)
-          .innerJoin(merchants, eq(merchants.id, razorpayConnections.merchantId))
-          .where(eq(razorpayConnections.rzpAccountId, accountId))
-          .limit(1);
-        const found = joined.at(0)?.m;
-        if (found) return settings(found);
-      }
-
-      // Single-merchant install talking to its own keys — how the first design
-      // partners run. Multi-tenant installs always carry an account id.
-      const only = await db.select().from(merchants).where(sql`deleted_at is null`).limit(2);
-      return only.length === 1 && only[0] ? settings(only[0]) : null;
-    },
-  });
-
-  return NextResponse.json(result.body, { status: result.status });
+  return {
+    ok: false,
+    reason: 'endpoint_moved',
+    detail:
+      'This URL no longer accepts deliveries. Each Razorpay account has its own endpoint, ' +
+      'because the signature must be verified with that account’s own secret.',
+    useInstead: rows.map((m) => ({
+      merchant: m.name,
+      url: `/api/webhooks/razorpay/${m.slug}`,
+    })),
+  };
 }
 
-/** Razorpay's dashboard pings the URL before saving a webhook. */
-export function GET(): NextResponse {
-  return NextResponse.json({ ok: true, endpoint: 'razorpay-webhook' });
+export async function POST(): Promise<NextResponse> {
+  // 410, not 404: the endpoint existed and is deliberately gone. Razorpay does
+  // not retry a 410, which is right — retrying cannot fix a wrong URL.
+  return NextResponse.json(await guidance(), { status: 410 });
+}
+
+export async function GET(): Promise<NextResponse> {
+  return NextResponse.json(await guidance(), { status: 410 });
 }

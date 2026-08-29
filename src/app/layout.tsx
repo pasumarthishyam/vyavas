@@ -1,6 +1,9 @@
 import type { Metadata } from 'next';
 import './globals.css';
 import { Nav } from '../components/nav';
+import { MerchantSwitcher } from '../components/merchant-switcher';
+import { getDb } from '../db/client';
+import { selectMerchant } from '../lib/merchant-context';
 
 export const metadata: Metadata = {
   title: 'Vyavas — Revenue at Risk',
@@ -31,7 +34,18 @@ try {
 } catch (e) {}
 `;
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  // Resolved here rather than per page: the switcher is part of the shell, and
+  // every page under it must agree about which account is being looked at.
+  // Tolerant of a database that is not reachable yet — the shell still renders
+  // so a misconfigured deployment shows its own error page rather than a blank.
+  let selection = null;
+  try {
+    selection = await selectMerchant(getDb());
+  } catch {
+    selection = null;
+  }
+
   return (
     <html lang="en-IN" suppressHydrationWarning>
       <head>
@@ -40,7 +54,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body>
         <div className="shell">
-          <Nav />
+          <Nav
+            switcher={
+              selection ? (
+                <MerchantSwitcher current={selection.current} all={selection.all} />
+              ) : null
+            }
+          />
           <main className="main">{children}</main>
         </div>
       </body>

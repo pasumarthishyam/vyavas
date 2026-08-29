@@ -162,14 +162,31 @@ export interface ConsoleMerchant {
   quietHoursStart: number;
   quietHoursEnd: number;
   timezone: string;
+  /**
+   * Where messages actually land. Read from the same columns the senders read,
+   * so the console cannot report a diversion that is not in force.
+   */
+  whatsappRedirectTo: string | null;
+  emailRedirectTo: string | null;
+  emailFrom: string | null;
 }
 
-export async function getConsoleMerchant(db: Database): Promise<ConsoleMerchant | null> {
+/**
+ * The merchant the console is operating on.
+ *
+ * Takes an explicit id. It used to return "the first merchant", which was
+ * correct while there was one and silently wrong the moment there were two —
+ * a Start click on the Sandbox page would have run a recovery on the live
+ * account, using the live account's customers.
+ */
+export async function getConsoleMerchant(
+  db: Database,
+  merchantId: string,
+): Promise<ConsoleMerchant | null> {
   const rows = await db
     .select()
     .from(merchants)
-    .where(sql`deleted_at is null`)
-    .orderBy(merchants.createdAt)
+    .where(sql`${merchants.id} = ${merchantId} and deleted_at is null`)
     .limit(1);
   const m = rows.at(0);
   if (!m) return null;
@@ -182,5 +199,8 @@ export async function getConsoleMerchant(db: Database): Promise<ConsoleMerchant 
     quietHoursStart: m.quietHoursStart,
     quietHoursEnd: m.quietHoursEnd,
     timezone: m.timezone,
+    whatsappRedirectTo: m.whatsappRedirectTo,
+    emailRedirectTo: m.emailRedirectTo,
+    emailFrom: m.emailFrom,
   };
 }

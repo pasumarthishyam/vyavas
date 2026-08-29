@@ -34,7 +34,7 @@ import { appendEvent } from '../db/repos/cases.js';
 import type { Paise } from '../core/money.js';
 import { compose } from '../messaging/compose.js';
 import { sendMessage, type SendChannels, type SendOutcome } from '../messaging/send.js';
-import { getChannels } from './channels.js';
+import { channelsForMerchant } from './merchant-clients.js';
 import { ensurePaymentLink } from './payment-link.js';
 import type { RazorpayClient } from '../adapters/razorpay/client.js';
 import type { GatheredFacts } from './facts.js';
@@ -53,9 +53,17 @@ export interface ExecuteRungInput {
   /** Rails the diagnosis permits. Used to filter what a nudge may suggest. */
   diagnosisRails: readonly AlternateRail[];
   sameInstrumentRetry: boolean;
-  /** Injected by tests; production resolves from env. */
+  /** Injected by tests; production resolves from the merchant. */
   channels?: SendChannels;
-  /** Omitted in tests that do not exercise link creation. */
+  /**
+   * The merchant's own Razorpay client, resolved by the caller.
+   *
+   * Deliberately NOT resolved here from a fallback. Omitting it means "do not
+   * create a payment link", and it has to keep meaning exactly that: an
+   * omitted credential that quietly becomes whatever key is in the environment
+   * is how a link gets created on the wrong merchant's account and takes a real
+   * customer to a checkout billing the wrong business.
+   */
   razorpay?: RazorpayClient;
 }
 
@@ -269,7 +277,10 @@ export async function executeRung(input: ExecuteRungInput): Promise<RungOutcome>
       frequencyCap: gathered.facts.frequencyCap,
       idempotencyKey: key,
       suppressedReason,
-      channels: input.channels ?? getChannels(),
+      // Resolved from the merchant, not from global env: the routing that
+      // decides whether this reaches the customer or a test inbox is a property
+      // of the merchant this case belongs to.
+      channels: input.channels ?? (await channelsForMerchant(db, merchantId)),
     });
 
     if (sendOutcome.status === 'refused') {

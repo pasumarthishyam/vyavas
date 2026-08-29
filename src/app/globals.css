@@ -1562,3 +1562,154 @@ table.data tbody tr:last-child td {
   background: var(--good);
   color: #fff;
 }
+
+/* ── merchant switcher ──────────────────────────────────────────────────────
+   Sits directly under the brand. Which account you are looking at, and whether
+   it can reach real customers, are the two facts that give every number below
+   its meaning — so neither is hidden behind the menu. */
+
+.sidebar-switcher {
+  padding: 0 12px 10px;
+}
+
+.switcher {
+  position: relative;
+}
+
+.switcher-face {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.switcher-face:hover:not(:disabled) {
+  background: var(--surface-2, var(--surface));
+  border-color: var(--line-strong, var(--line));
+}
+
+.switcher-face:disabled {
+  cursor: default;
+}
+
+.switcher-name {
+  flex: 1;
+  font-weight: 550;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.switcher-caret {
+  font-size: 10px;
+  opacity: 0.5;
+}
+
+.switcher-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 40;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.12);
+}
+
+.switcher-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.switcher-item:hover {
+  background: var(--surface-2, rgb(128 128 128 / 0.08));
+}
+
+.switcher-item.is-current {
+  font-weight: 550;
+}
+
+.switcher-item-name {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The mode chip. `live` alone is not the alarming state — `live` with nothing
+   diverted is, and only that one gets the red treatment. */
+.mode-chip {
+  flex-shrink: 0;
+  padding: 2px 6px;
+  border-radius: 5px;
+  font-size: 10.5px;
+  font-weight: 550;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  background: rgb(128 128 128 / 0.12);
+  color: var(--muted);
+}
+
+.mode-dry_run {
+  background: rgb(59 130 246 / 0.13);
+  color: rgb(37 99 235);
+}
+
+.mode-live {
+  background: rgb(16 185 129 / 0.15);
+  color: rgb(5 150 105);
+}
+
+.mode-danger {
+  background: rgb(239 68 68 / 0.15);
+  color: rgb(220 38 38);
+}
+
+.mode-chip-flag {
+  margin-left: 3px;
+  font-weight: 500;
+  opacity: 0.85;
+}
+
+:root:not([data-theme='light']) .mode-dry_run,
+[data-theme='dark'] .mode-dry_run {
+  color: rgb(147 197 253);
+}
+
+:root:not([data-theme='light']) .mode-live,
+[data-theme='dark'] .mode-live {
+  color: rgb(110 231 183);
+}
+
+:root:not([data-theme='light']) .mode-danger,
+[data-theme='dark'] .mode-danger {
+  color: rgb(252 165 165);
+}
+
+/* Collapsed sidebar: the switcher would have nowhere to render its name. */
+[data-sidebar='collapsed'] .sidebar-switcher {
+  display: none;
+}

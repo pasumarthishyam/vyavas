@@ -33,6 +33,37 @@ import {
 } from '../../db/repos/index.js';
 import type { RazorpayPaymentEntity } from '../../adapters/razorpay/types.js';
 
+/**
+ * The seam between ingest and the durable engine.
+ *
+ * An interface rather than a direct Inngest import, so the whole pipeline stays
+ * testable without a workflow engine running — the ingest tests omit it and
+ * assert on the returned result, exactly as they did before.
+ *
+ * It is optional, but omitting it in production means a case is diagnosed,
+ * stamped with a ladder, and then nothing ever runs it. That was the actual
+ * state of this system: `publishCaseDiagnosed` existed with zero callers, so
+ * every ladder was fully built and never started.
+ */
+export interface WorkflowPublisher {
+  caseDiagnosed(data: {
+    caseId: string;
+    merchantId: string;
+    causeClass: string;
+    policyId: string;
+    policyVersion: number;
+    cohort: 'treatment' | 'holdout';
+    attended: boolean;
+  }): Promise<unknown>;
+
+  caseResolved(data: {
+    caseId: string;
+    merchantId: string;
+    outcome: 'recovered' | 'aborted' | 'lost';
+    reason: string;
+  }): Promise<unknown>;
+}
+
 export interface HandlerContext {
   db: Database;
   merchantId: string;
@@ -41,6 +72,8 @@ export interface HandlerContext {
   /** Merchant holdout share, in basis points. */
   holdoutBasisPoints: number;
   holdoutEnabled: boolean;
+  /** Starts and stops ladders. Omitted in tests; required in production. */
+  publish?: WorkflowPublisher;
 }
 
 export interface PaymentFailedResult {

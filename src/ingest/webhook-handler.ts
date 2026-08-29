@@ -32,6 +32,7 @@ import {
 import type { Database } from '../db/client.js';
 import { recordWebhook } from '../db/repos/webhooks.js';
 import { type HandlerContext, type ProcessResult, processClaimedEvent } from './pipeline.js';
+import type { WorkflowPublisher } from './handlers/payment-failed.js';
 
 export interface WebhookDeps {
   db: Database;
@@ -47,6 +48,14 @@ export interface WebhookDeps {
    * real this must be a genuine enqueue or the 200 will not come back in time.
    */
   enqueue?: (job: () => Promise<ProcessResult>) => Promise<ProcessResult | null>;
+  /**
+   * Starts and stops ladders.
+   *
+   * Optional so the handler tests run with no workflow engine. In production
+   * the route passes `workflowPublisher`, and without it a diagnosed case is
+   * written correctly and then never executed.
+   */
+  publish?: WorkflowPublisher;
 }
 
 export interface MerchantSettings {
@@ -142,6 +151,7 @@ export async function handleWebhookRequest(
     now: deps.now(),
     holdoutBasisPoints: merchant.holdoutBasisPoints,
     holdoutEnabled: merchant.holdoutEnabled,
+    ...(deps.publish ? { publish: deps.publish } : {}),
   };
 
   // 3 ── Hand off the slow part.

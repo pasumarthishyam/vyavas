@@ -399,13 +399,19 @@ export async function getTopReasons(
  * Single-tenant by design for now. A real merchant switcher is Stage 8 work,
  * alongside Partner OAuth.
  */
-export async function getFirstMerchant(db: Database) {
+/**
+ * One merchant by id.
+ *
+ * Replaces `getFirstMerchant`. Every dashboard figure is scoped to a single
+ * account on purpose — aggregating a live business and a sandbox into one
+ * headline would produce a number nobody could reconcile.
+ */
+export async function getMerchant(db: Database, merchantId: string) {
   const { merchants } = await import('../schema/tenancy.js');
   const rows = await db
     .select()
     .from(merchants)
-    .where(sql`deleted_at is null`)
-    .orderBy(merchants.createdAt)
+    .where(sql`id = ${merchantId} and deleted_at is null`)
     .limit(1);
   return rows.at(0) ?? null;
 }

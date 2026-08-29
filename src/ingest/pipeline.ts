@@ -55,6 +55,32 @@ export async function processEvent(
       const entity = extractEntity<RazorpayPaymentEntity>(envelope, 'payment');
       if (!entity) return { event, handled: false, outcome: 'missing_payment_entity' };
       const r = await handlePaymentFailed(ctx, entity);
+
+      // START THE LADDER.
+      //
+      // This is the line that turns a diagnosed case into a running recovery.
+      // Without it the pipeline does everything correctly and then stops: the
+      // case exists, the ladder is stamped on it, and nothing ever fires.
+      //
+      // Guarded on `aborted` because a terminal case (already paid, duplicate)
+      // legitimately has no ladder, and on `policyId` because a case with no
+      // stamped policy has nothing to run. `publishCaseDiagnosed` checks the
+      // latter too, and `run-ladder` refuses an empty ladder, and Inngest's
+      // idempotency key stops a duplicate event starting a second run — three
+      // independent guards, because the failure mode is doubled messages to a
+      // real person.
+      if (!r.aborted && r.policyId) {
+        await ctx.publish?.caseDiagnosed({
+          caseId: r.caseId,
+          merchantId: ctx.merchantId,
+          causeClass: r.causeClass,
+          policyId: r.policyId,
+          policyVersion: r.policyVersion,
+          cohort: r.cohort,
+          attended: r.attended,
+        });
+      }
+
       return {
         event,
         handled: true,
@@ -84,6 +110,24 @@ export async function processEvent(
 
       if (!payment) return { event, handled: false, outcome: 'missing_payment_entity' };
       const r = await handlePaymentSucceeded(ctx, payment, { orderId });
+
+      // STOP THE LADDER, immediately.
+      //
+      // `run-ladder` declares `cancelOn` for this event, so it dies wherever it
+      // is sleeping — no polling, no check to forget on a new rung type. This
+      // is why the money arriving must publish promptly: the gate would also
+      // catch it at the next rung, but "the next rung" can be 26 hours away,
+      // and a recovery message sent to someone who already paid is the mistake
+      // that ends the merchant relationship.
+      if (r.closed && r.caseId) {
+        await ctx.publish?.caseResolved({
+          caseId: r.caseId,
+          merchantId: ctx.merchantId,
+          outcome: 'recovered',
+          reason: event,
+        });
+      }
+
       return { event, handled: true, outcome: r.reason, caseId: r.caseId };
     }
 

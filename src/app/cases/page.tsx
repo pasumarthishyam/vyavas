@@ -1,7 +1,8 @@
 import Link from 'next/link';
 
 import { getDb } from '../../db/client';
-import { getCauseClassBreakdown, getFirstMerchant, getRecentCases } from '../../db/queries/dashboard';
+import { selectMerchant } from '../../lib/merchant-context';
+import { getCauseClassBreakdown, getMerchant, getRecentCases } from '../../db/queries/dashboard';
 import { Empty } from '../../components/charts';
 import { StatePill, causeLabel, inr, relativeTime } from '../../components/ui';
 import type { CaseState } from '../../core/case/types';
@@ -18,7 +19,8 @@ export default async function CasesPage({
 }) {
   const params = await searchParams;
   const db = getDb();
-  const merchant = await getFirstMerchant(db);
+  const selection = await selectMerchant(db);
+  const merchant = selection ? await getMerchant(db, selection.current.id) : null;
 
   if (!merchant) {
     return <Empty title="No merchant connected" body="Run npm run seed:demo to load sample data." />;

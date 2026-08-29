@@ -4,6 +4,7 @@ import { eq, sql } from 'drizzle-orm';
 import { getDb } from '../../../../db/client';
 import { merchants } from '../../../../db/schema/tenancy';
 import { getConsoleMerchant } from '../../../../db/queries/recovery';
+import { currentMerchantId } from '../../../../lib/merchant-context';
 
 /**
  * The send mode.
@@ -29,7 +30,9 @@ export async function POST(request: Request): Promise<NextResponse> {
     body.mode === 'live' ? 'live' : body.mode === 'dry_run' ? 'dry_run' : 'off';
 
   const db = getDb();
-  const merchant = await getConsoleMerchant(db);
+  // The account the console is pointed at, never "the first one".
+  const merchantId = await currentMerchantId(db);
+  const merchant = merchantId ? await getConsoleMerchant(db, merchantId) : null;
   if (!merchant) {
     return NextResponse.json({ ok: false, reason: 'no merchant' }, { status: 404 });
   }

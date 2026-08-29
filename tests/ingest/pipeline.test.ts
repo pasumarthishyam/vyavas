@@ -343,3 +343,94 @@ describe('unrouted and unsubscribed events', () => {
     expect(r.outcome).toBe('missing_payment_entity');
   });
 });
+
+/**
+ * Starting and stopping the ladder.
+ *
+ * These exist because the system spent its entire life with this wire missing.
+ * `publishCaseDiagnosed` was written, documented and tested-adjacent, and had
+ * ZERO callers — so every failure was ingested, diagnosed, stamped with a
+ * ladder, and then nothing ran it. Nothing failed; nothing happened.
+ *
+ * A test that only checks the returned `ProcessResult` cannot catch that: the
+ * result was always correct. The only way to notice is to assert on the seam
+ * itself.
+ */
+describe('the workflow seam', () => {
+  function spyPublisher() {
+    const diagnosed: unknown[] = [];
+    const resolved: unknown[] = [];
+    return {
+      diagnosed,
+      resolved,
+      publish: {
+        caseDiagnosed: async (d: unknown) => {
+          diagnosed.push(d);
+        },
+        caseResolved: async (d: unknown) => {
+          resolved.push(d);
+        },
+      },
+    };
+  }
+
+  it('starts a ladder for a diagnosed failure', async () => {
+    const spy = spyPublisher();
+    const r = await processEvent({ ...ctx, publish: spy.publish }, FAILURE_SCENARIOS.card_expired());
+
+    expect(spy.diagnosed).toHaveLength(1);
+    expect(spy.diagnosed[0]).toMatchObject({
+      caseId: r.caseId,
+      merchantId: ctx.merchantId,
+      causeClass: 'instrument_dead',
+      cohort: 'treatment',
+      attended: true,
+    });
+  });
+
+  it('carries the stamped policy, so the ladder runs the one the case was given', async () => {
+    const spy = spyPublisher();
+    const r = await processEvent({ ...ctx, publish: spy.publish }, FAILURE_SCENARIOS.card_expired());
+
+    const c = await caseRow(r.caseId!);
+    expect(spy.diagnosed[0]).toMatchObject({
+      policyId: c.policyId,
+      policyVersion: c.policyVersion,
+    });
+  });
+
+  it('does NOT start a ladder for a terminal case', async () => {
+    // `order_already_paid` has no ladder. Publishing would start a run that
+    // immediately does nothing, and burn an Inngest idempotency key on a case
+    // that must never reach a rung.
+    const spy = spyPublisher();
+    await processEvent({ ...ctx, publish: spy.publish }, FAILURE_SCENARIOS.order_already_paid());
+    expect(spy.diagnosed).toHaveLength(0);
+  });
+
+  it('cancels the ladder the moment the money arrives', async () => {
+    const spy = spyPublisher();
+    const failed = await processEvent(
+      { ...ctx, publish: spy.publish },
+      FAILURE_SCENARIOS.card_expired(),
+    );
+    const c = await caseRow(failed.caseId!);
+
+    await processEvent(
+      { ...ctx, publish: spy.publish },
+      orderPaidEnvelope({ orderId: c.rzpOrderId!, amount: Number(c.amountAtRiskPaise) }),
+    );
+
+    // The gate would also catch this at the next rung — but the next rung can
+    // be 26 hours away, and a recovery message to someone who already paid is
+    // the mistake that ends the merchant relationship.
+    expect(spy.resolved).toHaveLength(1);
+    expect(spy.resolved[0]).toMatchObject({ caseId: failed.caseId, outcome: 'recovered' });
+  });
+
+  it('works with no publisher at all', async () => {
+    // The ingest tests run without a workflow engine, and must keep doing so.
+    const r = await processEvent(ctx, FAILURE_SCENARIOS.card_expired());
+    expect(r.outcome).toBe('diagnosed');
+  });
+});

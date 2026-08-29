@@ -14,7 +14,7 @@
  *    `compose.ts` sanitises; this classifies what gets through anyway.
  */
 
-import { env, requireWhatsAppConfig } from '../../lib/env.js';
+import { requireWhatsAppConfig } from '../../lib/env.js';
 
 const GRAPH_VERSION = 'v21.0';
 const BASE = `https://graph.facebook.com/${GRAPH_VERSION}`;
@@ -125,6 +125,13 @@ export interface WhatsAppClientOptions {
   baseUrl?: string;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
+  /**
+   * Divert every message to this number instead of the customer's.
+   *
+   * Passed in explicitly by the caller, which is always the merchant's own
+   * routing setting. Null means send to the real recipient.
+   */
+  redirectTo?: string | null;
 }
 
 export function createWhatsAppClient(opts: WhatsAppClientOptions = {}): WhatsAppClient {
@@ -145,20 +152,28 @@ export function createWhatsAppClient(opts: WhatsAppClientOptions = {}): WhatsApp
    * ladder — real failures, real diagnosis, real sends — without a real
    * customer receiving anything.
    *
-   * Refused under NODE_ENV=production. A diversion accidentally left on in
-   * production would quietly funnel every customer's message to one phone,
-   * which is a worse failure than either sending or not sending: the merchant
-   * would see "delivered" on messages nobody received.
+   * It is a MERCHANT property, passed in by the caller, and deliberately not an
+   * environment flag. The previous version refused to divert whenever
+   * NODE_ENV was 'production', on the reasoning that a diversion left on in
+   * production would funnel every customer's message to one phone while the
+   * merchant saw "delivered".
+   *
+   * That reasoning holds only if production means real customers. It stops
+   * holding the moment a sandbox merchant and a live merchant run on the same
+   * deployment — which is exactly the setup this system needs — and it failed
+   * in the dangerous direction: the safety net switched itself off on deploy,
+   * silently, while the console still reported messages as diverted.
+   *
+   * Per merchant, the sandbox diverts and the live account does not, both in
+   * production, both stated explicitly in the UI from this same value.
    */
-  const e = env();
-  const redirectTo =
-    e.NODE_ENV === 'production' ? undefined : e.WHATSAPP_REDIRECT_TO?.replace(/[^\d]/g, '');
+  const redirectTo = opts.redirectTo ? opts.redirectTo.replace(/[^\d]/g, '') : null;
 
   function route(to: string): string {
     if (!redirectTo) return to;
     const cleaned = to.replace(/[^\d]/g, '');
     if (cleaned !== redirectTo) {
-      console.warn(`  [whatsapp] diverted ${cleaned} -> ${redirectTo} (WHATSAPP_REDIRECT_TO)`);
+      console.warn(`  [whatsapp] diverted ${cleaned} -> ${redirectTo} (merchant routing)`);
     }
     return redirectTo;
   }

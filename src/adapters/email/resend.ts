@@ -47,6 +47,14 @@ export interface EmailClientOptions {
   baseUrl?: string;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
+  /**
+   * Divert every email to this address instead of the customer's.
+   *
+   * The merchant's own routing setting, passed in explicitly — same contract as
+   * the WhatsApp diversion, so a sandbox merchant behaves identically on both
+   * channels. Null means send to the real recipient.
+   */
+  redirectTo?: string | null;
 }
 
 export interface EmailClient {
@@ -67,6 +75,13 @@ export function createEmailClient(opts: EmailClientOptions = {}): EmailClient {
   const base = opts.baseUrl ?? BASE;
   const doFetch = opts.fetchImpl ?? fetch;
   const timeoutMs = opts.timeoutMs ?? 15_000;
+  const redirectTo = opts.redirectTo ?? null;
+
+  function route(to: string): string {
+    if (!redirectTo || to === redirectTo) return to;
+    console.warn(`  [email] diverted ${to} -> ${redirectTo} (merchant routing)`);
+    return redirectTo;
+  }
 
   return {
     async send(input: SendEmailInput): Promise<EmailResult> {
@@ -82,7 +97,7 @@ export function createEmailClient(opts: EmailClientOptions = {}): EmailClient {
           },
           body: JSON.stringify({
             from: input.from ?? defaultFrom,
-            to: [input.to],
+            to: [route(input.to)],
             subject: input.subject,
             text: input.text,
             reply_to: input.replyTo,

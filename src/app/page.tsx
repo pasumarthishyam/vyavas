@@ -4,7 +4,7 @@ import { getDb } from '../db/client';
 import {
   getCauseClassBreakdown,
   getDailyTrend,
-  getFirstMerchant,
+  getMerchant,
   getMethodBankHeatmap,
   getOpenAlerts,
   getRecentCases,
@@ -15,6 +15,7 @@ import { Bars, Empty, Heatmap, Trend } from '../components/charts';
 import { Alert, Delta, Stat, StatePill, causeHint, causeLabel, inr, relativeTime } from '../components/ui';
 import { DateRangeFilter } from '../components/date-range-filter';
 import { resolveDateRange } from '../lib/date-range';
+import { selectMerchant } from '../lib/merchant-context';
 
 // Every figure is live. A cached dashboard that quietly shows yesterday's
 // exposure is worse than no dashboard.
@@ -28,7 +29,8 @@ export default async function OverviewPage({
   const params = await searchParams;
   const resolved = resolveDateRange(params);
   const db = getDb();
-  const merchant = await getFirstMerchant(db);
+  const selection = await selectMerchant(db);
+  const merchant = selection ? await getMerchant(db, selection.current.id) : null;
 
   if (!merchant) {
     return (
