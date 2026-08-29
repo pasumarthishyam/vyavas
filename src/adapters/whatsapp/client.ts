@@ -14,7 +14,7 @@
  *    `compose.ts` sanitises; this classifies what gets through anyway.
  */
 
-import { requireWhatsAppConfig } from '../../lib/env.js';
+import { env, requireWhatsAppConfig } from '../../lib/env.js';
 
 const GRAPH_VERSION = 'v21.0';
 const BASE = `https://graph.facebook.com/${GRAPH_VERSION}`;
@@ -137,6 +137,32 @@ export function createWhatsAppClient(opts: WhatsAppClientOptions = {}): WhatsApp
   const doFetch = opts.fetchImpl ?? fetch;
   const timeoutMs = opts.timeoutMs ?? 15_000;
 
+  /**
+   * Test diversion.
+   *
+   * When set, every message goes to one number instead of the customer's. That
+   * makes it possible to run a PRODUCTION Razorpay account through the whole
+   * ladder — real failures, real diagnosis, real sends — without a real
+   * customer receiving anything.
+   *
+   * Refused under NODE_ENV=production. A diversion accidentally left on in
+   * production would quietly funnel every customer's message to one phone,
+   * which is a worse failure than either sending or not sending: the merchant
+   * would see "delivered" on messages nobody received.
+   */
+  const e = env();
+  const redirectTo =
+    e.NODE_ENV === 'production' ? undefined : e.WHATSAPP_REDIRECT_TO?.replace(/[^\d]/g, '');
+
+  function route(to: string): string {
+    if (!redirectTo) return to;
+    const cleaned = to.replace(/[^\d]/g, '');
+    if (cleaned !== redirectTo) {
+      console.warn(`  [whatsapp] diverted ${cleaned} -> ${redirectTo} (WHATSAPP_REDIRECT_TO)`);
+    }
+    return redirectTo;
+  }
+
   /** Both send paths differ only in the body they POST. */
   async function post(to: string, payload: Record<string, unknown>): Promise<SendResult> {
     const controller = new AbortController();
@@ -192,14 +218,14 @@ export function createWhatsAppClient(opts: WhatsAppClientOptions = {}): WhatsApp
 
   return {
     async sendText(input: SendTextInput): Promise<SendResult> {
-      return post(input.to, { type: 'text', text: { preview_url: true, body: input.text } });
+      return post(route(input.to), { type: 'text', text: { preview_url: true, body: input.text } });
     },
 
     async sendTemplate(input: SendTemplateInput): Promise<SendResult> {
-      const body = {
-        messaging_product: 'whatsapp',
-        recipient_type: 'individual',
-        to: input.to,
+      // Routed through the same `post` helper as sendText, so the test
+      // diversion cannot be bypassed by one path. A duplicated fetch here was
+      // exactly how the template path escaped it.
+      return post(route(input.to), {
         type: 'template',
         template: {
           name: input.templateName,
@@ -214,54 +240,7 @@ export function createWhatsAppClient(opts: WhatsAppClientOptions = {}): WhatsApp
                 ]
               : [],
         },
-      };
-
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-      try {
-        const res = await doFetch(`${base}/${cfg.phoneNumberId}/messages`, {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${cfg.accessToken}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(body),
-          signal: controller.signal,
-        });
-
-        const json = (await res.json()) as {
-          messages?: { id: string }[];
-          error?: { code?: number; message?: string; error_data?: { details?: string } };
-        };
-
-        if (res.ok && json.messages?.[0]?.id) {
-          return {
-            ok: true,
-            messageId: json.messages[0].id,
-            failure: null,
-            detail: null,
-            retryable: false,
-          };
-        }
-
-        const err = json.error ?? {};
-        const detail = err.error_data?.details ?? err.message ?? `HTTP ${res.status}`;
-        const { failure, retryable } = classify(err.code, detail);
-
-        return { ok: false, messageId: null, failure, detail, retryable };
-      } catch (e) {
-        // Network failure or timeout — always worth another attempt.
-        return {
-          ok: false,
-          messageId: null,
-          failure: 'transient',
-          detail: e instanceof Error ? e.message : String(e),
-          retryable: true,
-        };
-      } finally {
-        clearTimeout(timer);
-      }
+      });
     },
   };
 }

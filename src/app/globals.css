@@ -70,6 +70,27 @@
   --radius: 14px;
   --radius-sm: 8px;
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
+
+  --sidebar-w: 240px;
+  --sidebar-w-collapsed: 68px;
+  --shadow-sm: 0 1px 2px rgba(11, 11, 11, 0.04), 0 1px 1px rgba(11, 11, 11, 0.03);
+  --shadow-md: 0 4px 16px rgba(11, 11, 11, 0.06), 0 1px 2px rgba(11, 11, 11, 0.04);
+}
+
+:root[data-sidebar='collapsed'] {
+  --sidebar-w: var(--sidebar-w-collapsed);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.18), 0 1px 1px rgba(0, 0, 0, 0.14);
+    --shadow-md: 0 4px 20px rgba(0, 0, 0, 0.32), 0 1px 2px rgba(0, 0, 0, 0.2);
+  }
+}
+
+:root[data-theme='dark'] {
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.18), 0 1px 1px rgba(0, 0, 0, 0.14);
+  --shadow-md: 0 4px 20px rgba(0, 0, 0, 0.32), 0 1px 2px rgba(0, 0, 0, 0.2);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -209,7 +230,8 @@ svg {
 .shell {
   min-height: 100vh;
   display: grid;
-  grid-template-columns: 232px 1fr;
+  grid-template-columns: var(--sidebar-w) 1fr;
+  transition: grid-template-columns 0.22s var(--ease);
 }
 
 @media (max-width: 900px) {
@@ -220,14 +242,16 @@ svg {
 
 .sidebar {
   border-right: 1px solid var(--hairline);
-  padding: 28px 18px;
+  padding: 20px 14px 18px;
   position: sticky;
   top: 0;
   height: 100vh;
   display: flex;
   flex-direction: column;
-  gap: 30px;
-  background: var(--page);
+  gap: 22px;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
 }
 
 @media (max-width: 900px) {
@@ -239,8 +263,35 @@ svg {
     flex-direction: row;
     align-items: center;
     justify-content: space-between;
-    padding: 16px 20px;
+    padding: 14px 20px;
     gap: 16px;
+    box-shadow: none;
+  }
+}
+
+.sidebar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 4px 12px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+/*
+ * Collapsed head stacks brand-over-toggle rather than hiding the toggle: the
+ * button is the ONLY way back to the expanded state, so it must never be the
+ * thing that disappears when collapsed.
+ */
+:root[data-sidebar='collapsed'] .sidebar-head {
+  flex-direction: column;
+  gap: 10px;
+}
+
+@media (max-width: 900px) {
+  .sidebar-head {
+    padding: 0;
+    border-bottom: none;
   }
 }
 
@@ -248,33 +299,61 @@ svg {
   display: flex;
   align-items: center;
   gap: 9px;
-  padding-left: 8px;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .brand-mark {
-  width: 22px;
-  height: 22px;
-  border-radius: 6px;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
   background: var(--ink);
   color: var(--page);
   display: grid;
   place-items: center;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
   letter-spacing: -0.04em;
   flex-shrink: 0;
 }
 
 .brand-name {
-  font-size: 14px;
+  font-size: 14.5px;
   font-weight: 590;
   letter-spacing: -0.02em;
+  white-space: nowrap;
+}
+
+:root[data-sidebar='collapsed'] .brand-name {
+  display: none;
+}
+
+.collapse-btn {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  color: var(--ink-muted);
+  flex-shrink: 0;
+  transition: background 0.14s var(--ease), color 0.14s var(--ease);
+}
+
+.collapse-btn:hover {
+  background: var(--surface-hover);
+  color: var(--ink);
+}
+
+@media (max-width: 900px) {
+  .collapse-btn {
+    display: none;
+  }
 }
 
 .nav {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 2px;
 }
 
 @media (max-width: 900px) {
@@ -286,13 +365,37 @@ svg {
 .nav-item {
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 7px 10px;
+  gap: 10px;
+  padding: 8px 10px;
   border-radius: var(--radius-sm);
   color: var(--ink-secondary);
   font-size: 13.5px;
-  font-weight: 450;
+  font-weight: 480;
+  position: relative;
   transition: background 0.14s var(--ease), color 0.14s var(--ease);
+}
+
+.nav-item-icon {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+}
+
+.nav-item-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+:root[data-sidebar='collapsed'] .nav-item {
+  justify-content: center;
+  padding: 8px;
+}
+
+:root[data-sidebar='collapsed'] .nav-item-label {
+  display: none;
 }
 
 .nav-item:hover {
@@ -301,9 +404,21 @@ svg {
 }
 
 .nav-item[aria-current='page'] {
-  background: var(--surface-hover);
-  color: var(--ink);
-  font-weight: 530;
+  background: var(--data-soft);
+  color: var(--data);
+  font-weight: 560;
+}
+
+/* Active rail: the accent the flat text link was missing. */
+.nav-item[aria-current='page']::before {
+  content: '';
+  position: absolute;
+  left: -14px;
+  top: 6px;
+  bottom: 6px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--data);
 }
 
 .nav-section {
@@ -317,10 +432,11 @@ svg {
 
 .sidebar-foot {
   margin-top: auto;
-  padding: 0 10px;
-  font-size: 11.5px;
-  color: var(--ink-muted);
-  line-height: 1.55;
+  padding-top: 14px;
+  border-top: 1px solid var(--hairline);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
 @media (max-width: 900px) {
@@ -329,10 +445,51 @@ svg {
   }
 }
 
+.theme-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 480;
+  color: var(--ink-secondary);
+  transition: background 0.14s var(--ease), color 0.14s var(--ease);
+}
+
+.theme-toggle:hover {
+  background: var(--surface-hover);
+  color: var(--ink);
+}
+
+:root[data-sidebar='collapsed'] .theme-toggle {
+  justify-content: center;
+  padding: 8px;
+}
+
+.sidebar-note {
+  font-size: 11.5px;
+  color: var(--ink-muted);
+  line-height: 1.55;
+  padding: 0 10px;
+}
+
+:root[data-sidebar='collapsed'] .sidebar-note {
+  display: none;
+}
+
 .main {
   min-width: 0;
   padding: 40px 44px 88px;
   max-width: 1180px;
+  /*
+   * Centered rather than left-hugging: when the sidebar collapses (or on a
+   * wide monitor), the grid column is wider than the content's max-width, and
+   * a left-hugging box strands the right-aligned page-head text with a big
+   * dead zone past it. Centering keeps the margins symmetric — and therefore
+   * the layout looking intentional — in both sidebar states.
+   */
+  margin-inline: auto;
 }
 
 @media (max-width: 900px) {
@@ -450,6 +607,7 @@ h2 {
   border: 1px solid var(--hairline);
   border-radius: var(--radius);
   padding: 22px 24px;
+  box-shadow: var(--shadow-sm);
 }
 
 .card-head {
@@ -474,12 +632,17 @@ h2 {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.grid-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .grid-4 {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 @media (max-width: 980px) {
-  .grid-4 {
+  .grid-4,
+  .grid-3 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .grid-2 {
@@ -488,7 +651,8 @@ h2 {
 }
 
 @media (max-width: 560px) {
-  .grid-4 {
+  .grid-4,
+  .grid-3 {
     grid-template-columns: 1fr;
   }
 }
@@ -514,6 +678,7 @@ h2 {
   flex-direction: column;
   gap: 6px;
   min-width: 0;
+  box-shadow: var(--shadow-sm);
 }
 
 .stat-label {
@@ -774,6 +939,7 @@ table.data tbody tr:last-child td {
   border: 1px solid var(--hairline);
   background: var(--surface);
   align-items: flex-start;
+  box-shadow: var(--shadow-sm);
 }
 
 /*
@@ -1019,6 +1185,87 @@ table.data tbody tr:last-child td {
   color: var(--page);
 }
 
+/* ─── date-range filter ───────────────────────────────────────────────────── */
+
+.date-filter {
+  position: relative;
+}
+
+.date-filter-chips {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.date-filter-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  z-index: 20;
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  padding: 14px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
+  white-space: nowrap;
+}
+
+.date-filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 11.5px;
+  color: var(--ink-muted);
+}
+
+.date-filter-field input[type='date'] {
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  font-size: 13px;
+  font-family: inherit;
+  background: var(--page);
+  color: var(--ink);
+}
+
+.date-filter-field input[type='date']:focus-visible {
+  outline: 2px solid var(--data);
+  outline-offset: 1px;
+}
+
+.date-filter-apply {
+  background: var(--ink);
+  color: var(--page);
+  border-radius: var(--radius-sm);
+  padding: 7px 14px;
+  font-size: 12.5px;
+  font-weight: 530;
+  white-space: nowrap;
+}
+
+.date-filter-apply:hover {
+  opacity: 0.85;
+}
+
+@media (max-width: 560px) {
+  .date-filter-panel {
+    left: 0;
+    right: 0;
+    flex-wrap: wrap;
+  }
+}
+
+.page-head-controls {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+}
+
 .back {
   display: inline-flex;
   align-items: center;
@@ -1046,4 +1293,272 @@ table.data tbody tr:last-child td {
     transition-duration: 0.01ms !important;
     animation-duration: 0.01ms !important;
   }
+}
+
+/* ─── recovery console ────────────────────────────────────────────────────── */
+
+/*
+ * The console is a list of things you can act on. Each card puts the money
+ * first, the reason second, and exactly one button on the right — so the eye
+ * lands on the amount, then the action, with the detail available but not
+ * competing.
+ */
+
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 13px 16px;
+  border-radius: var(--radius);
+  border: 1px solid var(--hairline);
+  background: var(--surface);
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--ink-secondary);
+  margin-bottom: 18px;
+}
+
+.notice svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--ink-muted);
+}
+
+.notice-critical {
+  border-color: rgba(208, 59, 59, 0.35);
+  color: var(--ink);
+}
+
+.notice-critical svg {
+  color: var(--critical);
+}
+
+/* ── execution switch ── */
+
+.exec {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 11px 15px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.exec-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: right;
+}
+
+.exec-title {
+  font-size: 13px;
+  font-weight: 550;
+  letter-spacing: -0.012em;
+}
+
+.exec-sub {
+  font-size: 11.5px;
+  color: var(--ink-muted);
+}
+
+.toggle {
+  width: 42px;
+  height: 24px;
+  border-radius: 999px;
+  background: var(--baseline);
+  position: relative;
+  flex-shrink: 0;
+  transition: background 0.18s var(--ease);
+  padding: 0;
+}
+
+.toggle-on {
+  background: var(--good);
+}
+
+.toggle-knob {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: #fff;
+  transition: transform 0.18s var(--ease);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+.toggle-on .toggle-knob {
+  transform: translateX(18px);
+}
+
+/* ── case card ── */
+
+.case-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 20px 22px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  background: var(--surface);
+  transition: border-color 0.14s var(--ease);
+}
+
+.case-card:hover {
+  border-color: var(--hairline-strong);
+}
+
+@media (max-width: 720px) {
+  .case-card {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 16px;
+  }
+}
+
+.case-main {
+  min-width: 0;
+}
+
+/* Proportional figures — tabular makes a standalone amount read gappy. */
+.case-amount {
+  font-size: 25px;
+  font-weight: 600;
+  letter-spacing: -0.028em;
+  line-height: 1.15;
+  font-variant-numeric: proportional-nums;
+}
+
+.case-cause {
+  font-size: 13.5px;
+  font-weight: 520;
+  color: var(--ink-secondary);
+  margin-top: 3px;
+}
+
+.case-meta {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  margin-top: 9px;
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+
+.case-meta .urgent {
+  color: var(--critical);
+  font-weight: 500;
+}
+
+.case-reach {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.reach {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--ink-secondary);
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--hairline);
+  background: var(--surface-sunken);
+}
+
+/* A channel we cannot use is dimmed AND struck — never colour alone. */
+.reach-off {
+  color: var(--ink-muted);
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+
+.case-action {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-shrink: 0;
+}
+
+.btn-primary {
+  background: var(--ink);
+  color: var(--page);
+  border-radius: var(--radius-sm);
+  padding: 9px 18px;
+  font-size: 13.5px;
+  font-weight: 520;
+  letter-spacing: -0.01em;
+  transition: opacity 0.14s var(--ease), transform 0.08s var(--ease);
+  white-space: nowrap;
+}
+
+.btn-primary:hover:not(:disabled) {
+  opacity: 0.86;
+}
+
+.btn-primary:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.btn-primary:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.followup {
+  font-size: 12px;
+  color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.followup.done {
+  color: var(--data);
+}
+
+/* Three-state send mode. A segmented control rather than a toggle, because
+   off / dry run / live are three distinct states and a toggle can only show
+   two — which made the console offer a dry run the gate would refuse. */
+.segmented {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--hairline);
+}
+
+.segment {
+  padding: 5px 13px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--ink-muted);
+  white-space: nowrap;
+  transition: background 0.14s var(--ease), color 0.14s var(--ease);
+}
+
+.segment:hover {
+  color: var(--ink);
+}
+
+.segment-on {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+/* Live is the only state that reaches a real person, so it is the only one
+   that carries colour — and it carries the word too, never colour alone. */
+.segment-live {
+  background: var(--good);
+  color: #fff;
 }

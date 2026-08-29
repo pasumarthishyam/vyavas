@@ -32,7 +32,8 @@
     "templates:status": "tsx scripts/submit-templates.ts",
     "templates:submit": "tsx scripts/submit-templates.ts --submit",
     "send:test": "tsx scripts/send-test.ts",
-    "e2e": "tsx scripts/e2e.ts"
+    "e2e": "tsx scripts/e2e.ts",
+    "backfill": "tsx scripts/backfill.ts"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.2",

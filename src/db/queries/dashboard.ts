@@ -22,11 +22,13 @@ import { recoveryCases } from '../schema/cases.js';
 import { merchantAlerts } from '../schema/ops.js';
 import { customers } from '../schema/customers.js';
 import type { CaseState } from '../../core/case/types.js';
+import { priorRange, rangeSpanDays, type DateRange } from '../../lib/date-range.js';
 
 const num = paiseFromColumn;
 
-function since(days: number) {
-  return sql`now() - make_interval(days => ${days})`;
+/** `createdAt` within `[range.from, range.to)`. */
+function inRange(range: DateRange) {
+  return and(gte(recoveryCases.createdAt, range.from), lt(recoveryCases.createdAt, range.to));
 }
 
 // ─── the hero figure ─────────────────────────────────────────────────────────
@@ -49,9 +51,9 @@ export interface RevenueAtRisk {
 export async function getRevenueAtRisk(
   db: Database,
   merchantId: string,
-  days = 30,
+  range: DateRange,
 ): Promise<RevenueAtRisk> {
-  const scope = and(eq(recoveryCases.merchantId, merchantId), gte(recoveryCases.createdAt, since(days)));
+  const scope = and(eq(recoveryCases.merchantId, merchantId), inRange(range));
 
   const [totals] = await db
     .select({
@@ -73,13 +75,7 @@ export async function getRevenueAtRisk(
   const [prior] = await db
     .select({ total: sql`coalesce(sum(${recoveryCases.amountAtRiskPaise}), 0)` })
     .from(recoveryCases)
-    .where(
-      and(
-        eq(recoveryCases.merchantId, merchantId),
-        gte(recoveryCases.createdAt, since(days * 2)),
-        lt(recoveryCases.createdAt, since(days)),
-      ),
-    );
+    .where(and(eq(recoveryCases.merchantId, merchantId), inRange(priorRange(range))));
 
   const current = num(totals?.atRisk) + num(totals?.recovered) + num(totals?.lost);
   const previous = num(prior?.total);
@@ -115,7 +111,7 @@ export interface CauseClassRow {
 export async function getCauseClassBreakdown(
   db: Database,
   merchantId: string,
-  days = 30,
+  range: DateRange,
 ): Promise<CauseClassRow[]> {
   const rows = await db
     .select({
@@ -126,11 +122,7 @@ export async function getCauseClassBreakdown(
     })
     .from(recoveryCases)
     .where(
-      and(
-        eq(recoveryCases.merchantId, merchantId),
-        gte(recoveryCases.createdAt, since(days)),
-        isNotNull(recoveryCases.causeClass),
-      ),
+      and(eq(recoveryCases.merchantId, merchantId), inRange(range), isNotNull(recoveryCases.causeClass)),
     )
     .groupBy(recoveryCases.causeClass)
     .orderBy(desc(sql`coalesce(sum(${recoveryCases.amountAtRiskPaise}), 0)`));
@@ -160,13 +152,25 @@ export interface TrendPoint {
 export async function getDailyTrend(
   db: Database,
   merchantId: string,
-  days = 30,
+  range: DateRange,
 ): Promise<TrendPoint[]> {
+  // Anchored on `to` and stepped back by the exact day count, rather than
+  // flooring `from` independently: `from` is a raw instant (e.g. "7 days ago
+  // right now"), and flooring both ends separately can straddle one more
+  // calendar date than the window actually spans, padding a 7-day window
+  // with an 8th day.
+  const spanDays = rangeSpanDays(range);
+  // `postgres` (the real driver, unlike the PGlite one the test suite runs
+  // against) rejects a raw Date interpolated into a hand-written `sql`
+  // template — it needs an ISO string here, unlike the typed-column
+  // comparisons elsewhere in this file that take a Date natively.
+  const to = range.to.toISOString();
   const rows = await db.execute(sql`
     with span as (
       select generate_series(
-        date_trunc('day', now() - make_interval(days => ${days - 1})),
-        date_trunc('day', now()),
+        date_trunc('day', ${to}::timestamptz - interval '1 second')
+          - make_interval(days => ${spanDays - 1}::int),
+        date_trunc('day', ${to}::timestamptz - interval '1 second'),
         interval '1 day'
       )::date as day
     )
@@ -205,7 +209,7 @@ export interface HeatCell {
 export async function getMethodBankHeatmap(
   db: Database,
   merchantId: string,
-  days = 30,
+  range: DateRange,
 ): Promise<HeatCell[]> {
   const rows = await db
     .select({
@@ -215,7 +219,7 @@ export async function getMethodBankHeatmap(
       amount: sql`coalesce(sum(${recoveryCases.amountAtRiskPaise}), 0)`,
     })
     .from(recoveryCases)
-    .where(and(eq(recoveryCases.merchantId, merchantId), gte(recoveryCases.createdAt, since(days))))
+    .where(and(eq(recoveryCases.merchantId, merchantId), inRange(range)))
     .groupBy(recoveryCases.method, recoveryCases.bank)
     .orderBy(desc(count()));
 
@@ -356,7 +360,7 @@ export interface ReasonRow {
 export async function getTopReasons(
   db: Database,
   merchantId: string,
-  days = 30,
+  range: DateRange,
   limit = 8,
 ): Promise<ReasonRow[]> {
   const rows = await db
@@ -368,11 +372,7 @@ export async function getTopReasons(
     })
     .from(recoveryCases)
     .where(
-      and(
-        eq(recoveryCases.merchantId, merchantId),
-        gte(recoveryCases.createdAt, since(days)),
-        isNotNull(recoveryCases.errorReason),
-      ),
+      and(eq(recoveryCases.merchantId, merchantId), inRange(range), isNotNull(recoveryCases.errorReason)),
     )
     .groupBy(recoveryCases.errorReason, recoveryCases.causeClass)
     .orderBy(desc(sql`coalesce(sum(${recoveryCases.amountAtRiskPaise}), 0)`))
@@ -388,8 +388,24 @@ export async function getTopReasons(
 
 // ─── one merchant, for the shell ─────────────────────────────────────────────
 
+/**
+ * The merchant the dashboard shows.
+ *
+ * Ordered by creation, so it stays the same across page loads. An unordered
+ * `limit(1)` is a coin flip once there is more than one row — the figures would
+ * silently change between refreshes, which is worse than showing the wrong
+ * merchant consistently.
+ *
+ * Single-tenant by design for now. A real merchant switcher is Stage 8 work,
+ * alongside Partner OAuth.
+ */
 export async function getFirstMerchant(db: Database) {
   const { merchants } = await import('../schema/tenancy.js');
-  const rows = await db.select().from(merchants).limit(1);
+  const rows = await db
+    .select()
+    .from(merchants)
+    .where(sql`deleted_at is null`)
+    .orderBy(merchants.createdAt)
+    .limit(1);
   return rows.at(0) ?? null;
 }

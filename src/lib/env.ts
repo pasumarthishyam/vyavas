@@ -59,6 +59,21 @@ const schema = z.object({
   /** Our own secret, echoed back to Meta during webhook verification. */
   WHATSAPP_VERIFY_TOKEN: z.string().min(1).optional(),
 
+  /**
+   * TEST ESCAPE HATCH — divert every WhatsApp message to this number.
+   *
+   * Set it and no customer receives anything on WhatsApp, whatever the case
+   * says; the intended recipient is still recorded in `message_log`, so the
+   * ledger stays truthful about who the message was FOR.
+   *
+   * This exists so a production Razorpay account can be run against real
+   * failures without messaging real people. It is deliberately refused when
+   * NODE_ENV is production — a diversion left on in production would silently
+   * send every customer's message to one phone, which is worse than either
+   * sending or not sending.
+   */
+  WHATSAPP_REDIRECT_TO: z.string().min(8).optional(),
+
   // ── Email ──
   RESEND_API_KEY: z.string().min(1).optional(),
   /**

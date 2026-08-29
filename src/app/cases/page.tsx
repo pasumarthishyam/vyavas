@@ -5,6 +5,7 @@ import { getCauseClassBreakdown, getFirstMerchant, getRecentCases } from '../../
 import { Empty } from '../../components/charts';
 import { StatePill, causeLabel, inr, relativeTime } from '../../components/ui';
 import type { CaseState } from '../../core/case/types';
+import { resolveDateRange } from '../../lib/date-range';
 
 export const dynamic = 'force-dynamic';
 
@@ -39,7 +40,9 @@ export default async function CasesPage({
       ...(stateFilter ? { state: stateFilter } : {}),
       ...(params.cause ? { causeClass: params.cause } : {}),
     }),
-    getCauseClassBreakdown(db, merchant.id, 30),
+    // The chip list only samples recent activity to suggest filters — it isn't
+    // itself a date filter, so a fixed 30-day window is fine here.
+    getCauseClassBreakdown(db, merchant.id, resolveDateRange({}).range),
   ]);
 
   const total = cases.reduce((sum, c) => sum + c.amountPaise, 0);

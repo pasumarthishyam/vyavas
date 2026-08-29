@@ -19,6 +19,7 @@ import {
   getTopReasons,
 } from '../../src/db/queries/dashboard.js';
 import { getCaseDetail } from '../../src/db/queries/case-detail.js';
+import { lastNDays } from '../../src/lib/date-range.js';
 import { createTestDb, schema, seedCustomer, seedMerchant, type TestDb } from './harness.js';
 
 let t: TestDb;
@@ -84,7 +85,7 @@ describe('getRevenueAtRisk', () => {
     await addCase({ amount: 200_000, state: 'recovered', recovered: 200_000 }, 2);
     await addCase({ amount: 50_000, state: 'lost' }, 3);
 
-    const r = await getRevenueAtRisk(t.db, merchantId);
+    const r = await getRevenueAtRisk(t.db, merchantId, lastNDays(30));
 
     // Money already recovered is not at risk, and money written off is gone —
     // rolling either into the headline is how a recovery dashboard ends up
@@ -97,34 +98,34 @@ describe('getRevenueAtRisk', () => {
 
   it('falls back to the full amount when nothing partial was recorded', async () => {
     await addCase({ amount: 90_000, state: 'recovered' }, 1);
-    expect((await getRevenueAtRisk(t.db, merchantId)).recoveredPaise).toBe(90_000);
+    expect((await getRevenueAtRisk(t.db, merchantId, lastNDays(30))).recoveredPaise).toBe(90_000);
   });
 
   it('counts distinct customers, not cases', async () => {
     await addCase({ amount: 1000 }, 1);
     await addCase({ amount: 1000 }, 2);
-    expect((await getRevenueAtRisk(t.db, merchantId)).customersAffected).toBe(1);
+    expect((await getRevenueAtRisk(t.db, merchantId, lastNDays(30))).customersAffected).toBe(1);
   });
 
   it('excludes cases outside the window', async () => {
     await addCase({ amount: 100_000, daysAgo: 60 }, 1);
-    expect((await getRevenueAtRisk(t.db, merchantId, 30)).atRiskPaise).toBe(0);
+    expect((await getRevenueAtRisk(t.db, merchantId, lastNDays(30))).atRiskPaise).toBe(0);
   });
 
   it('computes a delta against the preceding window', async () => {
     await addCase({ amount: 100_000, daysAgo: 5 }, 1); // current
     await addCase({ amount: 50_000, daysAgo: 40 }, 2); // prior
-    const r = await getRevenueAtRisk(t.db, merchantId, 30);
+    const r = await getRevenueAtRisk(t.db, merchantId, lastNDays(30));
     expect(r.deltaPct).toBeCloseTo(100, 0); // doubled
   });
 
   it('reports no delta rather than a fake one when there is no prior period', async () => {
     await addCase({ amount: 100_000 }, 1);
-    expect((await getRevenueAtRisk(t.db, merchantId)).deltaPct).toBeNull();
+    expect((await getRevenueAtRisk(t.db, merchantId, lastNDays(30))).deltaPct).toBeNull();
   });
 
   it('returns zeroes for a merchant with nothing', async () => {
-    const r = await getRevenueAtRisk(t.db, await seedMerchant(t.db));
+    const r = await getRevenueAtRisk(t.db, await seedMerchant(t.db), lastNDays(30));
     expect(r.atRiskPaise).toBe(0);
     expect(r.atRiskCases).toBe(0);
   });
@@ -139,7 +140,7 @@ describe('getCauseClassBreakdown', () => {
     }
     await addCase({ amount: 500_000, causeClass: 'funds_limits' }, 99);
 
-    const rows = await getCauseClassBreakdown(t.db, merchantId);
+    const rows = await getCauseClassBreakdown(t.db, merchantId, lastNDays(30));
     expect(rows[0]!.causeClass).toBe('funds_limits');
     expect(rows[0]!.amountPaise).toBe(500_000);
     expect(rows[1]!.cases).toBe(5);
@@ -148,7 +149,7 @@ describe('getCauseClassBreakdown', () => {
   it('counts recoveries per class', async () => {
     await addCase({ amount: 1000, causeClass: 'risk', state: 'recovered' }, 1);
     await addCase({ amount: 1000, causeClass: 'risk' }, 2);
-    const [row] = await getCauseClassBreakdown(t.db, merchantId);
+    const [row] = await getCauseClassBreakdown(t.db, merchantId, lastNDays(30));
     expect(row!.recoveredCases).toBe(1);
     expect(row!.cases).toBe(2);
   });
@@ -157,7 +158,7 @@ describe('getCauseClassBreakdown', () => {
 describe('getDailyTrend', () => {
   it('emits a dense series with zero-filled quiet days', async () => {
     await addCase({ amount: 100_000, daysAgo: 3 }, 1);
-    const trend = await getDailyTrend(t.db, merchantId, 7);
+    const trend = await getDailyTrend(t.db, merchantId, lastNDays(7));
 
     // A sparse series would compress a quiet week into a straight segment and
     // misstate the shape of the chart.
@@ -167,7 +168,7 @@ describe('getDailyTrend', () => {
   });
 
   it('returns chronological dates', async () => {
-    const trend = await getDailyTrend(t.db, merchantId, 5);
+    const trend = await getDailyTrend(t.db, merchantId, lastNDays(5));
     const dates = trend.map((p) => p.date);
     expect([...dates].sort()).toEqual(dates);
   });
@@ -179,7 +180,7 @@ describe('getMethodBankHeatmap', () => {
     await addCase({ amount: 2000, method: 'upi', bank: 'HDFC' }, 2);
     await addCase({ amount: 3000, method: 'card', bank: 'ICIC' }, 3);
 
-    const cells = await getMethodBankHeatmap(t.db, merchantId);
+    const cells = await getMethodBankHeatmap(t.db, merchantId, lastNDays(30));
     const upi = cells.find((c) => c.method === 'upi' && c.bank === 'HDFC');
     expect(upi!.cases).toBe(2);
     expect(upi!.amountPaise).toBe(3000);
@@ -193,7 +194,7 @@ describe('getTopReasons', () => {
     await addCase({ amount: 5000, reason: 'incorrect_otp' }, 2);
     await addCase({ amount: 400_000, reason: 'insufficient_funds' }, 3);
 
-    const rows = await getTopReasons(t.db, merchantId);
+    const rows = await getTopReasons(t.db, merchantId, lastNDays(30));
     expect(rows[0]!.errorReason).toBe('insufficient_funds');
   });
 });

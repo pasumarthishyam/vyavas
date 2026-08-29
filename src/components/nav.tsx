@@ -6,22 +6,56 @@ import { useEffect, useState } from 'react';
 
 const ITEMS = [
   { href: '/', label: 'Overview', icon: OverviewIcon },
+  { href: '/recovery', label: 'Failed Payment Agent', icon: RecoveryIcon },
   { href: '/cases', label: 'Cases', icon: CasesIcon },
 ];
 
 export function Nav() {
   const pathname = usePathname();
+  const [collapsed, setCollapsed] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    setCollapsed(document.documentElement.dataset.sidebar === 'collapsed');
+  }, []);
+
+  function toggle() {
+    const next = !collapsed;
+    setCollapsed(next);
+    document.documentElement.dataset.sidebar = next ? 'collapsed' : '';
+    try {
+      localStorage.setItem('vyavas-sidebar', next ? 'collapsed' : 'open');
+    } catch {
+      /* a viewer who blocks storage still gets the toggle for this session */
+    }
+  }
+
+  // Render the uncollapsed shape until the real state is known, so nothing
+  // jumps on hydration — the boot script already set the width for paint.
+  const isCollapsed = collapsed === true;
 
   return (
     <aside className="sidebar">
-      <div className="brand">
-        <div className="brand-mark">V</div>
-        <div className="brand-name">Vyavas</div>
+      <div className="sidebar-head">
+        <div className="brand">
+          <div className="brand-mark">V</div>
+          <div className="brand-name">Vyavas</div>
+        </div>
+        <button
+          className="collapse-btn"
+          onClick={toggle}
+          aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          aria-expanded={!isCollapsed}
+        >
+          <HamburgerIcon />
+        </button>
       </div>
 
       <nav className="nav">
         {ITEMS.map((item) => {
-          const active = item.href === '/' ? pathname === '/' : pathname.startsWith(item.href);
+          // usePathname() can render null on the first pass of a cold, dynamic
+          // page — guard rather than crash the whole shell over an active-tab
+          // highlight.
+          const active = item.href === '/' ? pathname === '/' : (pathname ?? '').startsWith(item.href);
           const Icon = item.icon;
           return (
             <Link
@@ -29,17 +63,20 @@ export function Nav() {
               href={item.href}
               className="nav-item"
               aria-current={active ? 'page' : undefined}
+              title={isCollapsed ? item.label : undefined}
             >
-              <Icon />
-              {item.label}
+              <span className="nav-item-icon">
+                <Icon />
+              </span>
+              <span className="nav-item-label">{item.label}</span>
             </Link>
           );
         })}
       </nav>
 
       <div className="sidebar-foot">
-        <ThemeToggle />
-        <div style={{ marginTop: 14 }}>
+        <ThemeToggle collapsed={isCollapsed} />
+        <div className="sidebar-note">
           Read-only. No messages are sent and no money moves.
         </div>
       </div>
@@ -47,7 +84,7 @@ export function Nav() {
   );
 }
 
-function ThemeToggle() {
+function ThemeToggle({ collapsed }: { collapsed: boolean }) {
   const [theme, setTheme] = useState<'light' | 'dark' | null>(null);
 
   useEffect(() => {
@@ -81,22 +118,30 @@ function ThemeToggle() {
   return (
     <button
       onClick={toggle}
-      style={{
-        fontSize: 11.5,
-        color: 'var(--ink-muted)',
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 6,
-      }}
+      className="theme-toggle"
+      title={collapsed ? `Switch to ${theme === 'dark' ? 'light' : 'dark'} theme` : undefined}
       aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
     >
       {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
-      {theme === 'dark' ? 'Light' : 'Dark'}
+      <span className="nav-item-label">{theme === 'dark' ? 'Light' : 'Dark'}</span>
     </button>
   );
 }
 
 /* Icons: 1.5px strokes, currentColor, so they sit in the ink scale like text. */
+
+function HamburgerIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path
+        d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
 
 function OverviewIcon() {
   return (
@@ -108,6 +153,20 @@ function OverviewIcon() {
         strokeLinecap="round"
         strokeLinejoin="round"
       />
+    </svg>
+  );
+}
+
+function RecoveryIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path
+        d="M13.5 8a5.5 5.5 0 1 1-1.7-4"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+      <path d="M12.2 1.9v2.4H9.8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }

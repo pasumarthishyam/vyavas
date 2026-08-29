@@ -19,11 +19,24 @@ try {
 } catch (e) {}
 `;
 
+/**
+ * Same reasoning as THEME_BOOT: applied before first paint so a viewer who
+ * collapsed the sidebar last time never sees it flash open-then-shut.
+ */
+const SIDEBAR_BOOT = `
+try {
+  if (localStorage.getItem('vyavas-sidebar') === 'collapsed') {
+    document.documentElement.dataset.sidebar = 'collapsed';
+  }
+} catch (e) {}
+`;
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en-IN" suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME_BOOT }} />
+        <script dangerouslySetInnerHTML={{ __html: SIDEBAR_BOOT }} />
       </head>
       <body>
         <div className="shell">

@@ -13,14 +13,20 @@ import {
 } from '../db/queries/dashboard';
 import { Bars, Empty, Heatmap, Trend } from '../components/charts';
 import { Alert, Delta, Stat, StatePill, causeHint, causeLabel, inr, relativeTime } from '../components/ui';
+import { DateRangeFilter } from '../components/date-range-filter';
+import { resolveDateRange } from '../lib/date-range';
 
 // Every figure is live. A cached dashboard that quietly shows yesterday's
 // exposure is worse than no dashboard.
 export const dynamic = 'force-dynamic';
 
-const WINDOW_DAYS = 30;
-
-export default async function OverviewPage() {
+export default async function OverviewPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ days?: string; from?: string; to?: string }>;
+}) {
+  const params = await searchParams;
+  const resolved = resolveDateRange(params);
   const db = getDb();
   const merchant = await getFirstMerchant(db);
 
@@ -42,17 +48,17 @@ export default async function OverviewPage() {
   }
 
   const [risk, causes, trend, heat, alerts, cases, reasons] = await Promise.all([
-    getRevenueAtRisk(db, merchant.id, WINDOW_DAYS),
-    getCauseClassBreakdown(db, merchant.id, WINDOW_DAYS),
-    getDailyTrend(db, merchant.id, WINDOW_DAYS),
-    getMethodBankHeatmap(db, merchant.id, WINDOW_DAYS),
+    getRevenueAtRisk(db, merchant.id, resolved.range),
+    getCauseClassBreakdown(db, merchant.id, resolved.range),
+    getDailyTrend(db, merchant.id, resolved.range),
+    getMethodBankHeatmap(db, merchant.id, resolved.range),
     getOpenAlerts(db, merchant.id),
     getRecentCases(db, merchant.id, { limit: 8 }),
-    getTopReasons(db, merchant.id, WINDOW_DAYS, 6),
+    getTopReasons(db, merchant.id, resolved.range, 6),
   ]);
 
-  const resolved = risk.recoveredCases + risk.lostCases;
-  const recoveryRate = resolved > 0 ? (risk.recoveredCases / resolved) * 100 : null;
+  const resolvedCount = risk.recoveredCases + risk.lostCases;
+  const recoveryRate = resolvedCount > 0 ? (risk.recoveredCases / resolvedCount) * 100 : null;
 
   return (
     <>
@@ -61,10 +67,18 @@ export default async function OverviewPage() {
           <div className="eyebrow">{merchant.name}</div>
           <h1>Revenue at risk</h1>
         </div>
-        <div className="subtle" style={{ textAlign: 'right' }}>
-          Last {WINDOW_DAYS} days
-          <br />
-          <span className="muted">Read-only · nothing is sent</span>
+        <div className="page-head-controls">
+          <DateRangeFilter
+            key={resolved.preset ?? `${resolved.customFrom}_${resolved.customTo}`}
+            preset={resolved.preset}
+            customFrom={resolved.customFrom}
+            customTo={resolved.customTo}
+          />
+          <div className="subtle" style={{ textAlign: 'right' }}>
+            {resolved.label}
+            <br />
+            <span className="muted">Read-only · nothing is sent</span>
+          </div>
         </div>
       </div>
 
@@ -91,7 +105,7 @@ export default async function OverviewPage() {
         <Stat
           label="Recovery rate"
           value={recoveryRate == null ? '—' : `${recoveryRate.toFixed(0)}%`}
-          foot={resolved > 0 ? `of ${resolved} resolved` : 'nothing resolved yet'}
+          foot={resolvedCount > 0 ? `of ${resolvedCount} resolved` : 'nothing resolved yet'}
         />
         <Stat
           label="Written off"
