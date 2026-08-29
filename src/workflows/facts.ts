@@ -164,7 +164,19 @@ export async function gatherFacts(opts: GatherOptions): Promise<GatheredFacts | 
   // The most recent REAL touch to this person, across every case. Suppressed
   // rows are excluded for the same reason as the cap: a holdout record must not
   // silence a treatment customer.
+  //
+  // Also counts the real touches ON THIS CASE, which is what decides whether a
+  // rung is the first one. Read from the ledger rather than from the case's
+  // `messagesSent` counter: a denormalised counter is only as good as every
+  // code path that remembers to bump it, one of them did not, and the failure
+  // mode is a case that claims to be a first touch forever — which would hand
+  // the quiet-hours exemption to every rung it ever runs.
   let minutesSinceLastTouch: number | null = null;
+  const [touchesOnCase] = await db
+    .select({ n: count() })
+    .from(messageLog)
+    .where(and(eq(messageLog.caseId, caseId), isNull(messageLog.suppressedReason)));
+
   if (c.customerId) {
     const [last] = await db
       .select({ at: messageLog.sentAt })
@@ -201,9 +213,8 @@ export async function gatherFacts(opts: GatherOptions): Promise<GatheredFacts | 
     frequencyCap: m.frequencyCapPerDay,
     minutesSinceLastTouch,
     minGapMinutes: m.minGapMinutes,
-    // Rung 0 is the first touch. `messagesSent` counts real sends on this case,
-    // so zero means nobody has heard from us about it yet.
-    isFirstTouch: c.messagesSent === 0,
+    // Nobody has heard from us about this case yet.
+    isFirstTouch: Number(touchesOnCase?.n ?? 0) === 0,
     minutesSinceFailure: Math.floor((now.getTime() - c.createdAt.getTime()) / 60_000),
     liveCustomerWindowMinutes: m.liveCustomerWindowMinutes,
     timeZone: m.timezone,

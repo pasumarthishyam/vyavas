@@ -359,6 +359,16 @@ async function deliver(db: Database, input: DeliverInput): Promise<StepResult> {
 
   switch (outcome.status) {
     case 'sent':
+      // The ladder path does this in `executeRung`; this one did not, so a
+      // console-driven recovery left the case reading `messagesSent: 0` after
+      // two real sends. That is not merely a wrong number on a card — the gate
+      // reads it, and a counter that never moves makes every rung look like a
+      // first touch forever.
+      await db
+        .update(recoveryCases)
+        .set({ messagesSent: sql`${recoveryCases.messagesSent} + 1`, updatedAt: sql`now()` })
+        .where(eq(recoveryCases.id, input.caseId));
+
       return {
         channel: chosen,
         intent,

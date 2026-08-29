@@ -53,7 +53,18 @@ export const runLadder = inngest.createFunction(
     idempotency: 'event.data.caseId',
     // Per-merchant concurrency, so one merchant's outage burst cannot starve
     // every other tenant's workflows.
-    concurrency: [{ key: 'event.data.merchantId', limit: 25 }],
+    //
+    // 5, because that is the Inngest free plan's per-function ceiling and a
+    // function declaring more is REJECTED AT SYNC — the whole app fails to
+    // register, with `400 The function 'run-ladder' has higher concurrency
+    // limits (25) than your plan limit of 5` returned to a sync that then
+    // retries every five seconds forever. Nothing about the failure points at
+    // this line unless you read the sync response body.
+    //
+    // Raise it in step with the plan; it is a throughput ceiling, not a
+    // correctness one — the durable steps and the idempotency keys are what
+    // keep concurrent runs safe.
+    concurrency: [{ key: 'event.data.merchantId', limit: 5 }],
     // A case ending cancels the run immediately, wherever it is sleeping. This
     // is the kill switch, and it is declarative rather than a check we might
     // forget somewhere.

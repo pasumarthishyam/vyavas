@@ -96,23 +96,49 @@ export function RecoveryConsole({ initial }: { initial: Payload }) {
   async function start(caseId: string) {
     setBusy(caseId);
     setError(null);
+
+    // A start can genuinely take a few seconds — it creates a payment link on
+    // the merchant's Razorpay account before it can compose. But without a
+    // deadline a request that never returns leaves the button reading
+    // "Starting…" forever, which tells you nothing at all: no error, no state
+    // change, nothing in the log to search for. A silent hang is the worst
+    // failure this page can have, because it is the one you cannot report.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 45_000);
+
     try {
       const res = await fetch('/api/recovery/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ caseId }),
+        signal: controller.signal,
       });
-      const json = (await res.json()) as {
-        ok: boolean;
-        reason?: string;
-        followUpAt?: string | null;
-      };
-      if (!json.ok) setError(json.reason ?? 'Could not start');
+
+      // A 500 from a crashed route returns HTML, and `.json()` on HTML throws a
+      // parse error that reads like a bug in this component rather than what it
+      // is. Report the status instead.
+      const text = await res.text();
+      let json: { ok?: boolean; reason?: string; followUpAt?: string | null };
+      try {
+        json = JSON.parse(text) as typeof json;
+      } catch {
+        setError(`Server returned ${res.status} — ${text.slice(0, 120) || 'no body'}`);
+        return;
+      }
+
+      if (!json.ok) setError(json.reason ?? `Could not start (HTTP ${res.status})`);
       else if (json.followUpAt) setPending((p) => ({ ...p, [caseId]: json.followUpAt! }));
       await poll();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Request failed');
+      setError(
+        e instanceof DOMException && e.name === 'AbortError'
+          ? 'Timed out after 45s. The request never came back — check the Vercel logs for /api/recovery/start.'
+          : e instanceof Error
+            ? e.message
+            : 'Request failed',
+      );
     } finally {
+      clearTimeout(timer);
       setBusy(null);
     }
   }

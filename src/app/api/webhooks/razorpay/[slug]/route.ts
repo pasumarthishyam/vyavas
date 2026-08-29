@@ -39,9 +39,38 @@ export async function POST(
   const { slug } = await ctx.params;
   const db = getDb();
 
+  // ── two failures that look identical and are not ──
+  //
+  // A wrong slug in the Razorpay dashboard and a merchant with no stored secret
+  // both used to return the same 503, so a typo'd URL was indistinguishable
+  // from a configuration gap — and neither said which merchant it was looking
+  // for. Deliveries fail, the dashboard shows a red dot, and nothing anywhere
+  // says the word "slug".
+  //
+  // They are reported separately now, and both name the slugs that DO exist,
+  // because that is the one thing that turns this into a fix instead of an
+  // investigation.
+  const known = await db
+    .select({ slug: merchants.slug })
+    .from(merchants)
+    .where(sql`deleted_at is null`)
+    .orderBy(merchants.createdAt);
+
+  if (!known.some((m) => m.slug === slug)) {
+    return NextResponse.json(
+      {
+        ok: false,
+        reason: 'unknown_merchant',
+        slug,
+        hint: 'The URL path must match a merchant slug exactly.',
+        known: known.map((m) => m.slug),
+      },
+      { status: 404 },
+    );
+  }
+
   // Which secret to verify against. Stored per connection and encrypted; falls
-  // back to the single global secret so a one-merchant install that has not run
-  // `merchant -- connect --webhook-secret` yet keeps working.
+  // back to the single global secret only while exactly one merchant exists.
   const resolved = await loadWebhookSecret(db, slug);
 
   if (!resolved) {
@@ -49,7 +78,12 @@ export async function POST(
     // because a secret is missing is an open endpoint: anyone who learns the
     // URL can post fake payment failures and drive real messages to real people.
     return NextResponse.json(
-      { ok: false, reason: 'no_webhook_secret_for_merchant', slug },
+      {
+        ok: false,
+        reason: 'no_webhook_secret_for_merchant',
+        slug,
+        hint: `Store it with: npm run merchant -- connect --slug ${slug} --mode <test|live> --key … --secret … --webhook-secret …`,
+      },
       { status: 503 },
     );
   }

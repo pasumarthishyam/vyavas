@@ -81,8 +81,10 @@ async function main(): Promise<void> {
       return email();
     case 'routing':
       return routing();
+    case 'rename':
+      return rename();
     default:
-      console.error(`\n  Unknown command '${command}'. Try: list | create | connect | email | routing\n`);
+      console.error(`\n  Unknown command '${command}'. Try: list | create | connect | email | routing | rename\n`);
       process.exit(1);
   }
 }
@@ -255,6 +257,36 @@ async function routing(): Promise<void> {
     console.log('\n  ⚠  At least one channel now reaches real customers when sending is LIVE.');
   }
   console.log('');
+}
+
+/**
+ * Change a merchant's slug.
+ *
+ * The slug is the webhook URL path, so this is the thing that has to match what
+ * is typed into the Razorpay dashboard. Renaming is safer than editing the
+ * dashboard when the URL there is already right and ours is the odd one out.
+ */
+async function rename(): Promise<void> {
+  const slug = required('slug');
+  const to = required('to');
+
+  if (!/^[a-z0-9-]+$/.test(to)) {
+    console.error('\n  --to must be lowercase letters, digits and hyphens (it becomes a URL path).\n');
+    process.exit(1);
+  }
+
+  const merchant = await bySlug(slug);
+
+  const clash = await db.select().from(merchants).where(eq(merchants.slug, to)).limit(1);
+  if (clash.length > 0) {
+    console.error(`\n  '${to}' is already taken.\n`);
+    process.exit(1);
+  }
+
+  await db.update(merchants).set({ slug: to, updatedAt: sql`now()` }).where(eq(merchants.id, merchant.id));
+
+  console.log(`\n  ${merchant.name}: ${slug} → ${to}`);
+  console.log(`  Webhook URL is now  /api/webhooks/razorpay/${to}\n`);
 }
 
 async function bySlug(slug: string) {
