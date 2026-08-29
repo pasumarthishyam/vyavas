@@ -27,7 +27,7 @@
  * on someone else's fallback key is visible rather than assumed.
  */
 
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 
 import type { Database } from '../client.js';
 import { merchants, razorpayConnections } from '../schema/tenancy.js';
@@ -173,8 +173,26 @@ export async function loadWebhookSecret(
 
   if (row.enc) return { merchantId: row.id, secret: decryptSecret(row.enc) };
 
-  // Fallback to the single global secret, so a one-merchant install that has
-  // not been migrated yet keeps working.
+  // ── the env fallback, and why it is narrow ──
+  //
+  // A single global secret keeps a one-merchant install working before anyone
+  // has run `merchant -- connect --webhook-secret`. With TWO merchants it
+  // becomes a hole: both endpoints would verify against the same secret, so a
+  // payload signed by the live account would be accepted at the sandbox URL
+  // and ingested as a sandbox event — fabricated cases against real customer
+  // records, from a caller holding a secret for a different account entirely.
+  //
+  // So the fallback applies only while there is exactly one merchant. Past
+  // that, a missing per-merchant secret is a refusal, and the endpoint's GET
+  // says `secretConfigured: false` so it is visible from a browser rather than
+  // discovered when a delivery is rejected.
+  const counted = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(merchants)
+    .where(sql`deleted_at is null`);
+
+  if (Number(counted.at(0)?.n ?? 0) !== 1) return null;
+
   const fallback = env().RAZORPAY_WEBHOOK_SECRET;
   return fallback ? { merchantId: row.id, secret: fallback } : null;
 }
