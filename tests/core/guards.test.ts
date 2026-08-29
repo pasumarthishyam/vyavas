@@ -121,6 +121,14 @@ function facts(over: Partial<PreconditionFacts> = {}): PreconditionFacts {
     liveAttemptWindowMinutes: 3,
     recentMessageCount: 0,
     frequencyCap: 2,
+    minutesSinceLastTouch: null,
+    minGapMinutes: 360,
+    // Defaults describe an ORDINARY outbound rung — a follow-up, well after the
+    // failure. The live-customer exemption is opted into explicitly by the
+    // tests that are about it, so every other test keeps meaning what it says.
+    isFirstTouch: false,
+    minutesSinceFailure: 60,
+    liveCustomerWindowMinutes: 15,
     timeZone: IST,
     quietHours: DEFAULT_QUIET_HOURS,
     merchantBudgetRemaining: 100,
@@ -285,5 +293,103 @@ describe('selectChannel', () => {
 
   it('respects preference order, not eligibility order', () => {
     expect(selectChannel(['email', 'whatsapp'], ['whatsapp', 'email'])).toBe('email');
+  });
+});
+
+/**
+ * The cool-off floor.
+ *
+ * The frequency cap counts messages over 24 hours and cannot express "not twice
+ * in five minutes" — under a cap of 2, a second message ninety seconds after
+ * the first is permitted, and a customer with two live cases receives both.
+ */
+describe('minGapMinutes — the floor the cap cannot express', () => {
+  it('defers a second message inside the cool-off, even with cap headroom', () => {
+    const r = evaluatePreconditions(
+      ALL,
+      // Well inside a cap of 2, and five minutes since we last spoke.
+      facts({ recentMessageCount: 1, frequencyCap: 2, minutesSinceLastTouch: 5, minGapMinutes: 360 }),
+    );
+
+    expect(r.disposition).toBe('defer');
+    expect(r.reason).toContain('cool-off');
+    // Defer, not abort: the case is fine, only the timing is wrong.
+    expect(r.retryAt).not.toBeNull();
+  });
+
+  it('proceeds once the gap has passed', () => {
+    const r = evaluatePreconditions(ALL, facts({ minutesSinceLastTouch: 400, minGapMinutes: 360 }));
+    expect(r.disposition).toBe('proceed');
+  });
+
+  it('never blocks a first touch', () => {
+    expect(evaluatePreconditions(ALL, facts({ minutesSinceLastTouch: null })).disposition).toBe(
+      'proceed',
+    );
+  });
+
+  it('applies even when the policy does not list a frequency precondition', () => {
+    // A safety limit, so a ladder cannot opt out of it by omission — the same
+    // reasoning as `order_unpaid`. A policy may tighten a safety limit and may
+    // never loosen one.
+    const r = evaluatePreconditions([], facts({ minutesSinceLastTouch: 2, minGapMinutes: 360 }));
+    expect(r.disposition).toBe('defer');
+    expect(r.reason).toContain('cool-off');
+  });
+
+  it('retries just after the gap expires, not immediately', () => {
+    const r = evaluatePreconditions(ALL, facts({ minutesSinceLastTouch: 350, minGapMinutes: 360 }));
+    // 10 minutes left, so retrying now would just busy-wait against the floor.
+    expect(r.retryAt!.getTime() - AFTERNOON.getTime()).toBe(10 * 60_000);
+  });
+});
+
+/**
+ * The live-customer window.
+ *
+ * A card fails at 22:47. The customer is on the checkout page, holding their
+ * phone, looking at the error. Quiet hours exist to stop us waking people up —
+ * not to stop us answering someone who acted ninety seconds ago.
+ */
+describe('the live-customer window', () => {
+  const atNight = { now: LATE_IST, timeZone: IST, quietHours: DEFAULT_QUIET_HOURS };
+
+  it('lets the first touch through during quiet hours', () => {
+    const r = evaluatePreconditions(
+      ALL,
+      facts({ ...atNight, isFirstTouch: true, minutesSinceFailure: 1, liveCustomerWindowMinutes: 15 }),
+    );
+    expect(r.disposition).toBe('proceed');
+  });
+
+  it('still defers a follow-up during quiet hours', () => {
+    // The exemption is about answering someone who is present, not about
+    // being allowed to message at night.
+    const r = evaluatePreconditions(
+      ALL,
+      facts({ ...atNight, isFirstTouch: false, minutesSinceFailure: 1 }),
+    );
+    expect(r.disposition).toBe('defer');
+    expect(r.failed).toBe('not_quiet_hours');
+  });
+
+  it('defers a first touch that arrives long after the failure', () => {
+    // Past the window the person has put the phone down. This is what stops
+    // the exemption becoming a licence to message at 3am.
+    const r = evaluatePreconditions(
+      ALL,
+      facts({ ...atNight, isFirstTouch: true, minutesSinceFailure: 90, liveCustomerWindowMinutes: 15 }),
+    );
+    expect(r.disposition).toBe('defer');
+    expect(r.failed).toBe('not_quiet_hours');
+  });
+
+  it('does not exempt anything else', () => {
+    // Opted out is opted out, however live the customer is.
+    const r = evaluatePreconditions(
+      ALL,
+      facts({ ...atNight, isFirstTouch: true, minutesSinceFailure: 0, customerOptedOut: true }),
+    );
+    expect(r.disposition).toBe('abort');
   });
 });

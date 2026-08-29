@@ -42,6 +42,34 @@ export interface PreconditionFacts {
   readonly recentMessageCount: number;
   readonly frequencyCap: number;
 
+  /**
+   * Minutes since this person last actually heard from us. Null = never.
+   *
+   * The count-based cap cannot express "not twice in five minutes": under a cap
+   * of 2, a second message ninety seconds after the first is permitted, and a
+   * person with two live cases gets both.
+   */
+  readonly minutesSinceLastTouch: number | null;
+  /** Hard floor on that gap. Deterministic, never a judgement call. */
+  readonly minGapMinutes: number;
+
+  /**
+   * Is this the FIRST touch on this case?
+   *
+   * Only the first one can qualify for the live-customer exemption below. A
+   * follow-up hours later is an outbound message like any other.
+   */
+  readonly isFirstTouch: boolean;
+  /** Minutes since the payment failed. */
+  readonly minutesSinceFailure: number;
+  /**
+   * How long the customer is assumed to still be on the checkout page.
+   *
+   * Inside this window a first touch is a RESPONSE to something the person did
+   * seconds ago, not an outbound campaign — see the quiet-hours check below.
+   */
+  readonly liveCustomerWindowMinutes: number;
+
   readonly timeZone: string;
   readonly quietHours: QuietHours;
 
@@ -151,6 +179,29 @@ export function evaluatePreconditions(
     }
   }
 
+  // ── the cool-off floor ──
+  //
+  // Checked UNCONDITIONALLY, like `order_unpaid`, and for the same reason: it
+  // is a safety limit, and a policy may tighten a safety limit but never loosen
+  // one. A ladder that forgot to list it would otherwise be free to message
+  // someone twice in five minutes.
+  //
+  // Deliberately not a judgement call. A model that is right 99% of the time
+  // still double-messages someone once every hundred runs; a comparison does
+  // not.
+  if (
+    facts.minutesSinceLastTouch !== null &&
+    facts.minGapMinutes > 0 &&
+    facts.minutesSinceLastTouch < facts.minGapMinutes
+  ) {
+    const waitMs = (facts.minGapMinutes - facts.minutesSinceLastTouch) * MINUTE;
+    return defer(
+      'within_frequency_cap',
+      `messaged ${facts.minutesSinceLastTouch} minute(s) ago — inside the ${facts.minGapMinutes} minute cool-off`,
+      new Date(facts.now.getTime() + waitMs),
+    );
+  }
+
   if (required.includes('within_frequency_cap') && facts.recentMessageCount >= facts.frequencyCap) {
     // The cap is a rolling 24h window, so an hour from now is the soonest it is
     // worth asking again.
@@ -172,10 +223,31 @@ export function evaluatePreconditions(
 
   // Last, because it is the cheapest to satisfy by waiting and the least
   // informative to report — a case deferred for quiet hours is otherwise fine.
+  //
+  // ── the live-customer exemption ──
+  //
+  // Quiet hours exist to stop us WAKING PEOPLE UP. Someone who tapped Pay
+  // ninety seconds ago is awake, holding their phone, looking at an error
+  // message. Telling them "your card details didn't go through — UPI will work"
+  // is help, and it is a response to something they just did, not an outbound
+  // campaign at 22:47.
+  //
+  // Deferring it to 08:00 does not protect that person from anything; it loses
+  // the sale, because intent decays in minutes. `customer_input` is the class
+  // whose whole ladder opens at 0m for exactly this reason.
+  //
+  // Scoped so it cannot become a 3am loophole: FIRST touch only, and only
+  // inside a short window after the failure. Every later rung obeys quiet hours
+  // normally.
   if (required.includes('not_quiet_hours')) {
-    const allowed = nextAllowedTime(facts.now, facts.timeZone, facts.quietHours);
-    if (allowed.getTime() > facts.now.getTime()) {
-      return defer('not_quiet_hours', 'inside the merchant quiet-hours window', allowed);
+    const customerIsLive =
+      facts.isFirstTouch && facts.minutesSinceFailure <= facts.liveCustomerWindowMinutes;
+
+    if (!customerIsLive) {
+      const allowed = nextAllowedTime(facts.now, facts.timeZone, facts.quietHours);
+      if (allowed.getTime() > facts.now.getTime()) {
+        return defer('not_quiet_hours', 'inside the merchant quiet-hours window', allowed);
+      }
     }
   }
 

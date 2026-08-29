@@ -62,8 +62,16 @@ export const merchants = pgTable(
      * seconds after the first is permitted. This is that missing floor, and it
      * is deterministic on purpose: an agent that is right 99% of the time still
      * double-messages someone once every hundred runs.
+     *
+     * 15 minutes, NOT hours. The floor applies to every touch, and the policy
+     * table deliberately places second touches at 30 and 45 minutes for
+     * `customer_input` — the highest-recovery class in the taxonomy, fast
+     * precisely because intent decays in minutes. A longer floor would defer
+     * those rungs until the ladder had moved past them, quietly converting a
+     * two-touch ladder into a one-touch one. This constrains accidents (two
+     * live cases for one person firing together) and not design.
      */
-    minGapMinutes: smallint('min_gap_minutes').notNull().default(360),
+    minGapMinutes: smallint('min_gap_minutes').notNull().default(15),
 
     /**
      * How long after a failure the customer is assumed to still be on the page.

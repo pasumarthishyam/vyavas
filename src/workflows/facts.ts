@@ -128,6 +128,18 @@ export async function gatherFacts(opts: GatherOptions): Promise<GatheredFacts | 
   }
 
   // ── the live-attempt lock ──
+  // EXCLUDES the attempt that opened this case.
+  //
+  // The lock means "they are already retrying, do not interrupt". The payment
+  // that just failed is not them retrying — it is the event that summoned us,
+  // and it is by definition seconds old. Counting it made every `0m` rung defer
+  // by the lock window plus a minute, so `customer_input`, the one class whose
+  // floor is deliberately zero, actually opened at four minutes. The comment in
+  // customer-input.yaml says "they are looking at the error right now"; this is
+  // what made that true.
+  //
+  // A genuine second attempt still trips the lock, which is the behaviour worth
+  // keeping.
   let lastAttemptAt: Date | null = null;
   if (c.rzpOrderId) {
     const [attempt] = await db
@@ -137,11 +149,32 @@ export async function gatherFacts(opts: GatherOptions): Promise<GatheredFacts | 
         and(
           eq(paymentAttempts.merchantId, c.merchantId),
           eq(paymentAttempts.rzpOrderId, c.rzpOrderId),
+          c.rzpPaymentId
+            ? sql`${paymentAttempts.rzpPaymentId} <> ${c.rzpPaymentId}`
+            : sql`true`,
         ),
       )
       .orderBy(sql`${paymentAttempts.attemptedAt} desc`)
       .limit(1);
     lastAttemptAt = attempt?.at ?? null;
+  }
+
+  // ── the cool-off gap ──
+  //
+  // The most recent REAL touch to this person, across every case. Suppressed
+  // rows are excluded for the same reason as the cap: a holdout record must not
+  // silence a treatment customer.
+  let minutesSinceLastTouch: number | null = null;
+  if (c.customerId) {
+    const [last] = await db
+      .select({ at: messageLog.sentAt })
+      .from(messageLog)
+      .where(and(eq(messageLog.customerId, c.customerId), isNull(messageLog.suppressedReason)))
+      .orderBy(sql`${messageLog.sentAt} desc`)
+      .limit(1);
+    if (last?.at) {
+      minutesSinceLastTouch = Math.floor((now.getTime() - last.at.getTime()) / 60_000);
+    }
   }
 
   // ── today's budget ──
@@ -166,6 +199,13 @@ export async function gatherFacts(opts: GatherOptions): Promise<GatheredFacts | 
     liveAttemptWindowMinutes: m.liveAttemptLockMinutes,
     recentMessageCount,
     frequencyCap: m.frequencyCapPerDay,
+    minutesSinceLastTouch,
+    minGapMinutes: m.minGapMinutes,
+    // Rung 0 is the first touch. `messagesSent` counts real sends on this case,
+    // so zero means nobody has heard from us about it yet.
+    isFirstTouch: c.messagesSent === 0,
+    minutesSinceFailure: Math.floor((now.getTime() - c.createdAt.getTime()) / 60_000),
+    liveCustomerWindowMinutes: m.liveCustomerWindowMinutes,
     timeZone: m.timezone,
     quietHours: { start: m.quietHoursStart, end: m.quietHoursEnd },
     merchantBudgetRemaining: m.dailyMessageBudget - Number(sentToday?.n ?? 0),

@@ -29,6 +29,13 @@
       "when": 1788027008640,
       "tag": "0003_per_merchant_credentials",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1788035816746,
+      "tag": "0004_cool_off_default",
+      "breakpoints": true
     }
   ]
 }

@@ -310,6 +310,14 @@ describe('the gate runs before anything else', () => {
 });
 
 describe('idempotency', () => {
+  // These fire rungs back to back, which the cool-off floor would otherwise
+  // defer — correctly, but that would mean the idempotency key never gets
+  // exercised and a regression in it would pass unnoticed behind a different
+  // guard. Zero here so each test proves the thing it names.
+  beforeEach(async () => {
+    await t.db.update(schema.merchants).set({ minGapMinutes: 0 });
+  });
+
   it('sends once when a rung is replayed', async () => {
     const wa = fakeWhatsApp();
     const first = await fire({ channels: { whatsapp: wa.client } });

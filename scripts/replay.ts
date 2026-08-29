@@ -118,6 +118,14 @@ async function main(): Promise<void> {
           now: fireAt,
           orderPaid: false,
           deadlinePassed: c.deadlineAt != null && fireAt >= c.deadlineAt,
+          // The replay walks one case in isolation, so there is no prior touch
+          // to be inside a cool-off of, and every rung after the first is a
+          // follow-up by construction.
+          minutesSinceLastTouch: null,
+          minGapMinutes: 0,
+          isFirstTouch: touches === 0,
+          minutesSinceFailure: Math.floor((fireAt.getTime() - c.createdAt.getTime()) / 60_000),
+          liveCustomerWindowMinutes: 15,
           customerOptedOut: cust?.optedOutAt != null,
           eligibleChannels: eligible,
           lastAttemptAt: null,
