@@ -71,7 +71,7 @@ export async function processEvent(
       };
     }
 
-    // ── the money arrived: close the case before anything can be sent ──
+    // ──he money arrived: close the case before anything can be sent ──
     case 'order.paid':
     case 'payment.captured':
     case 'payment_link.paid':
