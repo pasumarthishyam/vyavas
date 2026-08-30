@@ -21,6 +21,9 @@ import { currentMerchantId } from '../../../../lib/merchant-context';
  */
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+// A webhook or a console mutation is short work, but it must never be allowed to
+// sit forever on a connection that stopped answering. A ceiling, not a target.
+export const maxDuration = 30;
 
 export type SendMode = 'off' | 'dry_run' | 'live';
 

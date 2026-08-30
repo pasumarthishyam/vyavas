@@ -21,6 +21,16 @@ import { caseEvents, recoveryCases } from '../db/schema/cases.js';
 
 export interface CaseRunContext {
   createdAt: Date;
+  /**
+   * The point past which this case is closed regardless.
+   *
+   * The ladder needs it to know how long a deferred rung is worth waiting for.
+   * Without it the workflow has no way to distinguish "wait three hours for the
+   * frequency cap to clear" from "wait past the end of the case", and it
+   * guessed — which is how a recoverable case was abandoned an hour before its
+   * gate would have opened.
+   */
+  deadlineAt: Date | null;
   rails: AlternateRail[];
   sameInstrumentRetry: boolean;
 }
@@ -30,7 +40,7 @@ export async function loadCaseForRun(
   caseId: string,
 ): Promise<CaseRunContext | null> {
   const rows = await db
-    .select({ createdAt: recoveryCases.createdAt })
+    .select({ createdAt: recoveryCases.createdAt, deadlineAt: recoveryCases.deadlineAt })
     .from(recoveryCases)
     .where(eq(recoveryCases.id, caseId))
     .limit(1);
@@ -54,6 +64,7 @@ export async function loadCaseForRun(
 
   return {
     createdAt: row.createdAt,
+    deadlineAt: row.deadlineAt,
     rails,
     // Defaults to FALSE when the ledger does not say. The conservative
     // direction: never re-present an instrument we cannot confirm is safe to

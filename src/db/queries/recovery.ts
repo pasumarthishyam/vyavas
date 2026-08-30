@@ -10,7 +10,7 @@ import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 
 import type { Database } from '../client.js';
 import { paiseFromColumn } from '../util.js';
-import { recoveryCases } from '../schema/cases.js';
+import { caseEvents, recoveryCases } from '../schema/cases.js';
 import { customers } from '../schema/customers.js';
 import { merchants } from '../schema/tenancy.js';
 import { messageLog } from '../schema/messaging.js';
@@ -82,44 +82,134 @@ function maskEmail(email: string): string {
   return `${user.slice(0, 3)}•••@${domain}`;
 }
 
-export interface ActivityRow {
+/** A message that was actually attempted. */
+export interface MessageActivity {
+  kind: 'message';
   id: string;
   caseId: string | null;
+  at: Date;
   channel: string;
   intent: string;
   status: string;
   suppressedReason: string | null;
   providerMessageId: string | null;
   error: string | null;
-  sentAt: Date;
-  deliveredAt: Date | null;
 }
 
-/** Recent sends, newest first. The console's live feed. */
+/** A decision the system made, whether or not it led to a message. */
+export interface DecisionActivity {
+  kind: 'decision';
+  id: string;
+  caseId: string | null;
+  at: Date;
+  /** `rung_deferred`, `diagnosed`, `state_changed`, `rung_abandoned`, … */
+  event: string;
+  actor: string;
+  /** The gate's own words: why it deferred, aborted or moved on. */
+  reason: string | null;
+  /** When the system intends to try again, when it said so. */
+  retryAt: Date | null;
+  detail: string | null;
+}
+
+export type ActivityRow = MessageActivity | DecisionActivity;
+
+/**
+ * Which decisions are worth a line in the feed.
+ *
+ * Deliberately a list, not "everything". The feed answers one question — why
+ * has this case not been paid yet — and a row that cannot contribute to that
+ * answer makes the rows that can harder to find.
+ */
+const NOTABLE_EVENTS = [
+  'diagnosed',
+  'rung_fired',
+  'rung_deferred',
+  'rung_aborted',
+  'rung_abandoned',
+  'rung_uncomposable',
+  'ladder_complete',
+  'payment_link_created',
+  'recovery_started',
+  'state_changed',
+];
+
+/**
+ * Recent activity, newest first: what was sent AND why it was or was not.
+ *
+ * This used to read `message_log` alone, and that one omission is why a working
+ * system looked like a dead one. When the gate defers every rung, nothing is
+ * ever written to `message_log`, so the console showed "Nothing sent yet" while
+ * `case_events` held a precise, timestamped record of the reason — four
+ * `rung_deferred` rows naming the frequency cap and the exact instant it would
+ * clear. The data was always there; the feed simply never looked at it.
+ *
+ * Two queries rather than a UNION: the tables share no useful column shape, and
+ * merging in SQL would mean casting both into a lowest common denominator that
+ * loses the fields the UI actually renders.
+ */
 export async function getRecentActivity(
   db: Database,
   merchantId: string,
   limit = 25,
 ): Promise<ActivityRow[]> {
-  const rows = await db
-    .select()
-    .from(messageLog)
-    .where(eq(messageLog.merchantId, merchantId))
-    .orderBy(desc(messageLog.sentAt))
-    .limit(limit);
+  const [messages, decisions] = await Promise.all([
+    db
+      .select()
+      .from(messageLog)
+      .where(eq(messageLog.merchantId, merchantId))
+      .orderBy(desc(messageLog.sentAt))
+      .limit(limit),
+    db
+      .select()
+      .from(caseEvents)
+      .where(
+        and(eq(caseEvents.merchantId, merchantId), inArray(caseEvents.kind, NOTABLE_EVENTS)),
+      )
+      .orderBy(desc(caseEvents.occurredAt))
+      .limit(limit),
+  ]);
 
-  return rows.map((r) => ({
-    id: r.id,
-    caseId: r.caseId,
-    channel: r.channel,
-    intent: r.intent,
-    status: r.status,
-    suppressedReason: r.suppressedReason,
-    providerMessageId: r.providerMessageId,
-    error: r.error,
-    sentAt: r.sentAt,
-    deliveredAt: r.deliveredAt,
-  }));
+  const rows: ActivityRow[] = [
+    ...messages.map(
+      (r): MessageActivity => ({
+        kind: 'message',
+        id: r.id,
+        caseId: r.caseId,
+        at: r.sentAt,
+        channel: r.channel,
+        intent: r.intent,
+        status: r.status,
+        suppressedReason: r.suppressedReason,
+        providerMessageId: r.providerMessageId,
+        error: r.error,
+      }),
+    ),
+    ...decisions.map((r): DecisionActivity => {
+      const payload = (r.payload ?? {}) as Record<string, unknown>;
+      const retryAt = typeof payload.retryAt === 'string' ? new Date(payload.retryAt) : null;
+
+      return {
+        kind: 'decision',
+        id: r.id,
+        caseId: r.caseId,
+        at: r.occurredAt,
+        event: r.kind,
+        actor: r.actor,
+        // The gate writes its verdict to `reason` on some events and into the
+        // payload on others. Read both, so the sentence a person needs is never
+        // the one field this happened not to look at.
+        reason:
+          (typeof payload.reason === 'string' ? payload.reason : null) ??
+          r.reason ??
+          (r.toState ? `→ ${r.toState}` : null),
+        retryAt: retryAt && !Number.isNaN(retryAt.getTime()) ? retryAt : null,
+        detail: typeof payload.note === 'string' ? payload.note : null,
+      };
+    }),
+  ];
+
+  return rows.sort((a, b) => b.at.getTime() - a.at.getTime()).slice(0, limit);
 }
 
 export interface RecoverySummary {

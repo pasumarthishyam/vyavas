@@ -121,6 +121,7 @@ function facts(over: Partial<PreconditionFacts> = {}): PreconditionFacts {
     liveAttemptWindowMinutes: 3,
     recentMessageCount: 0,
     frequencyCap: 2,
+    oldestMessageInWindowAt: null,
     minutesSinceLastTouch: null,
     minGapMinutes: 360,
     // Defaults describe an ORDINARY outbound rung — a follow-up, well after the
@@ -221,6 +222,45 @@ describe('defers — the reason is about right now', () => {
     const r = evaluatePreconditions(ALL, facts({ recentMessageCount: 2, frequencyCap: 2 }));
     expect(r.disposition).toBe('defer');
     expect(r.reason).toContain('cap 2');
+  });
+
+  /*
+   * The window is rolling, so the moment a slot frees is knowable exactly: 24h
+   * after the oldest message still inside it. It used to be guessed as a flat
+   * hour, and the guess is what lost a real case — the ladder gives a deferred
+   * rung a bounded number of retries, so an under-estimate makes it exhaust its
+   * patience and abandon the case before the gate would ever have opened.
+   */
+  it('names the exact instant the cap clears, not an hour from now', () => {
+    // Oldest of the two touches was 21h ago, so three more hours to wait.
+    const oldest = new Date(AFTERNOON.getTime() - 21 * 3600_000);
+    const r = evaluatePreconditions(
+      ALL,
+      facts({ recentMessageCount: 2, frequencyCap: 2, oldestMessageInWindowAt: oldest }),
+    );
+
+    expect(r.disposition).toBe('defer');
+    const waitMinutes = (r.retryAt!.getTime() - AFTERNOON.getTime()) / 60_000;
+    // Three hours, plus the one minute of margin that stops us waking early.
+    expect(waitMinutes).toBeCloseTo(181, 0);
+  });
+
+  it('waits past the naive one-hour guess when the window says so', () => {
+    const oldest = new Date(AFTERNOON.getTime() - 2 * 3600_000);
+    const r = evaluatePreconditions(
+      ALL,
+      facts({ recentMessageCount: 2, frequencyCap: 2, oldestMessageInWindowAt: oldest }),
+    );
+    // 22 hours out — the old flat hour would have given up twenty-one hours early.
+    expect(r.retryAt!.getTime() - AFTERNOON.getTime()).toBeGreaterThan(21 * 3600_000);
+  });
+
+  it('falls back to an hour when there is no timestamp to reason from', () => {
+    const r = evaluatePreconditions(
+      ALL,
+      facts({ recentMessageCount: 2, frequencyCap: 2, oldestMessageInWindowAt: null }),
+    );
+    expect(r.retryAt!.getTime() - AFTERNOON.getTime()).toBe(3600_000);
   });
 
   it('defers on an exhausted merchant budget, and waits longer', () => {

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { inr, causeLabel, relativeTime, Stat } from './ui';
+import { inr, causeLabel, relativeTime, whenLabel, Stat } from './ui';
 import type {
   ActivityRow,
   ConsoleMerchant,
@@ -51,17 +51,45 @@ interface Payload {
 
 const POLL_MS = 2500;
 
+/**
+ * How long a failure notice stays up.
+ *
+ * It used to stay up forever — `setError` was only ever cleared by starting
+ * another recovery — so a 45s timeout from four hours ago sat above a page that
+ * had been polling happily ever since, describing a request nobody could still
+ * remember making. A banner that outlives its fact is worse than no banner: it
+ * sends you to look for a problem that is no longer there.
+ */
+const NOTICE_TTL_MS = 90_000;
+
+/** Consecutive failed polls before the page admits it has stopped updating. */
+const STALE_AFTER_POLLS = 3;
+
+interface Notice {
+  message: string;
+  at: number;
+}
+
 export function RecoveryConsole({ initial }: { initial: Payload }) {
   const [data, setData] = useState<Payload>(initial);
   const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<Notice | null>(null);
+  const [stalled, setStalled] = useState<string | null>(null);
   const [pending, setPending] = useState<Record<string, string>>({});
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const misses = useRef(0);
+
+  const fail = useCallback((message: string) => {
+    setNotice({ message, at: Date.now() });
+  }, []);
 
   const poll = useCallback(async () => {
     try {
       const res = await fetch('/api/recovery/status', { cache: 'no-store' });
+
       if (res.ok) {
+        misses.current = 0;
+        setStalled(null);
         const next = (await res.json()) as Payload;
         setData(next);
         // A case stays "pending" from the moment its follow-up is scheduled
@@ -72,19 +100,44 @@ export function RecoveryConsole({ initial }: { initial: Payload }) {
         setPending((p) => {
           const stillPending = Object.fromEntries(
             Object.entries(p).filter(
-              ([caseId]) => !next.activity.some((a) => a.caseId === caseId && a.channel === 'email'),
+              ([caseId]) =>
+                !next.activity.some(
+                  (a) => a.caseId === caseId && a.kind === 'message' && a.channel === 'email',
+                ),
             ),
           );
           return Object.keys(stillPending).length === Object.keys(p).length ? p : stillPending;
         });
+      } else {
+        // A 503 here means the database stopped answering and the stale
+        // connection has been dropped; the next poll reconnects. Say so only
+        // once it has actually persisted — see below.
+        misses.current += 1;
+        const body = (await res.json().catch(() => ({}))) as { reason?: string };
+        if (misses.current >= STALE_AFTER_POLLS) {
+          setStalled(body.reason ?? `The server answered ${res.status}.`);
+        }
       }
     } catch {
-      // A dropped poll is not worth surfacing — the next one is 2.5s away, and
-      // an error banner that flashes on every network blip trains people to
-      // ignore the banner.
+      // One dropped poll is not worth surfacing — the next is 2.5s away, and a
+      // banner that flashes on every network blip trains people to ignore it.
+      // Several in a row IS worth surfacing: silence is exactly how a page that
+      // has stopped updating passes for one that has nothing to report.
+      misses.current += 1;
+      if (misses.current >= STALE_AFTER_POLLS) {
+        setStalled('Not reaching the server. This page has stopped updating.');
+      }
     }
     timer.current = setTimeout(() => void poll(), POLL_MS);
   }, []);
+
+  // Expire the notice on a timer rather than at the next render, so it is
+  // readable for a while and then gone for good.
+  useEffect(() => {
+    if (!notice) return;
+    const id = setTimeout(() => setNotice(null), NOTICE_TTL_MS);
+    return () => clearTimeout(id);
+  }, [notice]);
 
   useEffect(() => {
     timer.current = setTimeout(() => void poll(), POLL_MS);
@@ -95,7 +148,7 @@ export function RecoveryConsole({ initial }: { initial: Payload }) {
 
   async function start(caseId: string) {
     setBusy(caseId);
-    setError(null);
+    setNotice(null);
 
     // A start can genuinely take a few seconds — it creates a payment link on
     // the merchant's Razorpay account before it can compose. But without a
@@ -122,17 +175,20 @@ export function RecoveryConsole({ initial }: { initial: Payload }) {
       try {
         json = JSON.parse(text) as typeof json;
       } catch {
-        setError(`Server returned ${res.status} — ${text.slice(0, 120) || 'no body'}`);
+        fail(`Server returned ${res.status} — ${text.slice(0, 120) || 'no body'}`);
         return;
       }
 
-      if (!json.ok) setError(json.reason ?? `Could not start (HTTP ${res.status})`);
+      if (!json.ok) fail(json.reason ?? `Could not start (HTTP ${res.status})`);
       else if (json.followUpAt) setPending((p) => ({ ...p, [caseId]: json.followUpAt! }));
       await poll();
     } catch (e) {
-      setError(
+      fail(
         e instanceof DOMException && e.name === 'AbortError'
-          ? 'Timed out after 45s. The request never came back — check the Vercel logs for /api/recovery/start.'
+          ? // The route now holds its own 38s budget and answers with a reason,
+            // so reaching this at all means the request never got that far.
+            'No response in 45s. The server should have answered by 38s, so it never ' +
+            'reached the route — check the activity log below before retrying.'
           : e instanceof Error
             ? e.message
             : 'Request failed',
@@ -144,7 +200,7 @@ export function RecoveryConsole({ initial }: { initial: Payload }) {
   }
 
   async function setMode(mode: SendMode) {
-    setError(null);
+    setNotice(null);
     await fetch('/api/recovery/execution', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -191,10 +247,33 @@ export function RecoveryConsole({ initial }: { initial: Payload }) {
         />
       </div>
 
-      {error && (
+      {/*
+        Timestamped, so it cannot quietly become a description of something
+        that stopped being true hours ago.
+      */}
+      {notice && (
         <div className="notice notice-critical">
           <WarnIcon />
-          <span>{error}</span>
+          <span>
+            {notice.message}{' '}
+            <span className="subtle">· {relativeTime(new Date(notice.at))}</span>
+          </span>
+        </div>
+      )}
+
+      {/*
+        Separate from the notice above, because it says something different: not
+        "an action failed" but "everything you are looking at may be out of
+        date". Without it a page whose polls are all failing looks identical to
+        a page where nothing is happening.
+      */}
+      {stalled && (
+        <div className="notice notice-critical">
+          <WarnIcon />
+          <span>
+            {stalled} Showing the last data received — it may be stale. Retrying every{' '}
+            {POLL_MS / 1000}s.
+          </span>
         </div>
       )}
 
@@ -500,41 +579,64 @@ function Activity({ rows }: { rows: ActivityRow[] }) {
         <thead>
           <tr>
             <th>When</th>
-            <th>Channel</th>
-            <th>Message</th>
-            <th>Status</th>
+            <th>What</th>
+            <th>Detail</th>
+            <th>Outcome</th>
             <th>Reference</th>
           </tr>
         </thead>
         <tbody>
-          {rows.map((r) => (
-            <tr key={r.id}>
-              <td className="muted">{relativeTime(new Date(r.sentAt))}</td>
-              <td>
-                <span className="pill">
-                  {r.channel === 'email' ? <MailIcon /> : <ChatIcon />}
-                  {r.channel}
-                </span>
-              </td>
-              <td>{r.intent.replace(/_/g, ' ')}</td>
-              <td>
-                <span className="pill">
-                  <span
-                    className="dot"
-                    style={{ background: STATUS_TONE[r.status] ?? 'var(--ink-muted)' }}
-                  />
-                  {r.suppressedReason ?? r.status}
-                </span>
-              </td>
-              <td className="mono muted">
-                {r.error
-                  ? r.error.slice(0, 48)
-                  : r.providerMessageId
-                    ? `${r.providerMessageId.slice(0, 22)}…`
-                    : '—'}
-              </td>
-            </tr>
-          ))}
+          {rows.map((r) =>
+            r.kind === 'message' ? (
+              <tr key={r.id}>
+                <td className="muted">{relativeTime(new Date(r.at))}</td>
+                <td>
+                  <span className="pill">
+                    {r.channel === 'email' ? <MailIcon /> : <ChatIcon />}
+                    {r.channel}
+                  </span>
+                </td>
+                <td>{r.intent.replace(/_/g, ' ')}</td>
+                <td>
+                  <span className="pill">
+                    <span
+                      className="dot"
+                      style={{ background: STATUS_TONE[r.status] ?? 'var(--ink-muted)' }}
+                    />
+                    {r.suppressedReason ?? r.status}
+                  </span>
+                </td>
+                <td className="mono muted">
+                  {r.error
+                    ? r.error.slice(0, 48)
+                    : r.providerMessageId
+                      ? `${r.providerMessageId.slice(0, 22)}…`
+                      : '—'}
+                </td>
+              </tr>
+            ) : (
+              <tr key={r.id}>
+                <td className="muted">{relativeTime(new Date(r.at))}</td>
+                <td>
+                  <span className="pill">
+                    <GearIcon />
+                    {r.event.replace(/_/g, ' ')}
+                  </span>
+                </td>
+                {/*
+                  The gate's own sentence, unedited. "already 2 message(s) in 24h
+                  (cap 2)" is the whole answer to "why did nothing send", and
+                  paraphrasing it into a status word would throw away the only
+                  part that tells you what to do about it.
+                */}
+                <td>{r.reason ?? r.detail ?? '—'}</td>
+                <td className="muted">{r.actor}</td>
+                <td className="mono muted">
+                  {r.retryAt ? `retry ${whenLabel(new Date(r.retryAt))}` : '—'}
+                </td>
+              </tr>
+            ),
+          )}
         </tbody>
       </table>
     </div>
@@ -561,6 +663,21 @@ function MailIcon() {
     <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
       <rect x="2" y="3.5" width="12" height="9" rx="1.6" stroke="currentColor" strokeWidth="1.4" />
       <path d="m2.6 4.6 5.4 3.9 5.4-3.9" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+/** Marks a decision row — something the system worked out, not something it sent. */
+function GearIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <circle cx="8" cy="8" r="2.1" stroke="currentColor" strokeWidth="1.4" />
+      <path
+        d="M8 1.9v1.5M8 12.6v1.5M14.1 8h-1.5M3.4 8H1.9M12.3 3.7l-1.1 1.1M4.8 11.2l-1.1 1.1M12.3 12.3l-1.1-1.1M4.8 4.8 3.7 3.7"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+      />
     </svg>
   );
 }

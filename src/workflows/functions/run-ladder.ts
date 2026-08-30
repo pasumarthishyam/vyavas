@@ -23,7 +23,7 @@ import { NonRetriableError } from 'inngest';
 
 import { parseDuration } from '../../core/policy/duration.js';
 import { POLICY_TABLE } from '../../core/policy/index.js';
-import { transitionCase } from '../../db/repos/cases.js';
+import { appendEvent, transitionCase } from '../../db/repos/cases.js';
 import { getDb } from '../../db/client.js';
 import { gatherFacts } from '../facts.js';
 import { executeRung } from '../executor.js';
@@ -43,6 +43,17 @@ interface LadderSteps {
   run<T>(id: string, fn: () => Promise<T>): Promise<T>;
   sleepUntil(id: string, at: Date): Promise<unknown>;
 }
+
+/**
+ * How many times one rung may be deferred before the ladder gives up on it.
+ *
+ * A safety rail against a gate that keeps naming the same instant, not a
+ * judgement about how long a customer is worth waiting for — the case deadline
+ * is what answers that. With an accurate `retryAt` a real deferral clears in one
+ * or two waits, so reaching this limit means something is wrong with the gate
+ * and the `rung_abandoned` event is there to say so.
+ */
+const MAX_DEFERRALS_PER_RUNG = 12;
 
 export const runLadder = inngest.createFunction(
   {
@@ -103,26 +114,25 @@ export const runLadder = inngest.createFunction(
     const detectedAt = await step.run('load-case', async () => {
       const c = await loadCaseForRun(db, caseId);
       if (!c) throw new NonRetriableError(`Case ${caseId} disappeared`);
-      return { createdAt: c.createdAt.toISOString(), rails: c.rails, retry: c.sameInstrumentRetry };
+      return {
+        createdAt: c.createdAt.toISOString(),
+        deadlineAt: c.deadlineAt?.toISOString() ?? null,
+        rails: c.rails,
+        retry: c.sameInstrumentRetry,
+      };
     });
 
     const start = new Date(detectedAt.createdAt).getTime();
+    // Past this instant the case is closed by the deadline sweep, so waiting
+    // beyond it is waiting for nothing.
+    const deadline = detectedAt.deadlineAt ? new Date(detectedAt.deadlineAt).getTime() : null;
     const results: unknown[] = [];
 
-    for (let i = 0; i < policy.ladder.length; i++) {
-      const rung = policy.ladder[i]!;
-
-      // Offsets are from DETECTION, not from the previous rung — so a rung that
-      // was deferred does not push everything after it down the line.
-      const fireAt = new Date(start + parseDuration(rung.at));
-
-      if (fireAt.getTime() > Date.now()) {
-        await step.sleepUntil(`wait-rung-${i}`, fireAt);
-      }
-
-      const outcome = await step.run(`rung-${i}`, async () => {
+    /** One attempt at rung `i`. Identical on the first try and every retry. */
+    const attempt = async (i: number, rung: (typeof policy.ladder)[number], stepId: string) =>
+      step.run(stepId, async () => {
         const gathered = await gatherFacts({ db, caseId, now: new Date() });
-        if (!gathered) return { disposition: 'aborted' as const, note: 'case vanished' };
+        if (!gathered) return { disposition: 'aborted' as const, note: 'case vanished', retryAt: null };
 
         // This merchant's own account. Resolved here rather than inside the
         // executor: the workflow is where the merchant is unambiguous, and an
@@ -153,7 +163,78 @@ export const runLadder = inngest.createFunction(
         };
       });
 
+    for (let i = 0; i < policy.ladder.length; i++) {
+      const rung = policy.ladder[i]!;
+
+      // Offsets are from DETECTION, not from the previous rung — so a rung that
+      // was deferred does not push everything after it down the line.
+      const fireAt = new Date(start + parseDuration(rung.at));
+
+      if (fireAt.getTime() > Date.now()) {
+        await step.sleepUntil(`wait-rung-${i}`, fireAt);
+      }
+
+      let outcome = await attempt(i, rung, `rung-${i}`);
       results.push({ rung: i, ...outcome });
+
+      /**
+       * Wait out a deferral for as long as the case is alive.
+       *
+       * A deferral means "not right now", and the gate says exactly when to ask
+       * again. The only honest reasons to stop asking are that the case is over
+       * or that the gate has stopped giving a time.
+       *
+       * This used to allow exactly ONE retry, on the reasoning that a rung
+       * should not stall the ladder behind a quiet-hours window. That reasoning
+       * was inverted: moving on does not un-stall anything, it abandons the
+       * touch entirely. A real case sat with the frequency cap clearing three
+       * hours out, was deferred twice against a flat one-hour guess, and the
+       * ladder walked away 57 minutes early having sent nothing — no message,
+       * no alert, and a case left mid-flight. Waiting is what a ladder is for.
+       *
+       * The counter is a safety rail against a gate that defers to the same
+       * instant forever, not a policy choice; with an accurate `retryAt` a real
+       * deferral resolves in one or two waits.
+       */
+      for (let deferral = 1; outcome.disposition === 'deferred' && outcome.retryAt; deferral++) {
+        const retryAt = new Date(outcome.retryAt).getTime();
+
+        if (deadline !== null && retryAt >= deadline) {
+          await step.run(`rung-${i}-past-deadline`, async () => {
+            await appendEvent(db, {
+              caseId,
+              merchantId,
+              kind: 'rung_abandoned',
+              reason: 'deferred_past_deadline',
+              actor: 'workflow',
+              payload: { rung: i, note: outcome.note, retryAt: outcome.retryAt },
+            });
+            return { abandoned: true };
+          });
+          results.push({ rung: i, abandoned: 'deferred_past_deadline' });
+          break;
+        }
+
+        if (deferral > MAX_DEFERRALS_PER_RUNG) {
+          await step.run(`rung-${i}-defer-exhausted`, async () => {
+            await appendEvent(db, {
+              caseId,
+              merchantId,
+              kind: 'rung_abandoned',
+              reason: 'deferral_limit',
+              actor: 'workflow',
+              payload: { rung: i, note: outcome.note, deferrals: MAX_DEFERRALS_PER_RUNG },
+            });
+            return { abandoned: true };
+          });
+          results.push({ rung: i, abandoned: 'deferral_limit' });
+          break;
+        }
+
+        await step.sleepUntil(`defer-rung-${i}-${deferral}`, new Date(retryAt));
+        outcome = await attempt(i, rung, `rung-${i}-retry-${deferral}`);
+        results.push({ rung: i, retry: deferral, ...outcome });
+      }
 
       if (outcome.disposition === 'aborted') {
         await step.run(`abort-${i}`, async () => {
@@ -162,47 +243,25 @@ export const runLadder = inngest.createFunction(
         });
         return { caseId, outcome: 'aborted', at: i, results };
       }
-
-      // A deferred rung waits and tries once more. It does not retry forever:
-      // if the reason is still true after one wait, the ladder moves on rather
-      // than stalling the whole case behind a quiet-hours window.
-      if (outcome.disposition === 'deferred' && outcome.retryAt) {
-        await step.sleepUntil(`defer-rung-${i}`, new Date(outcome.retryAt));
-
-        const retry = await step.run(`rung-${i}-retry`, async () => {
-          const gathered = await gatherFacts({ db, caseId, now: new Date() });
-          if (!gathered) return { disposition: 'aborted' as const, note: 'case vanished' };
-          const razorpay = await razorpayForMerchant(db, merchantId);
-          const r = await executeRung({
-            db,
-            caseId,
-            merchantId,
-            rungIndex: i,
-            rung,
-            policy,
-            gathered,
-            cohort: data.cohort,
-            diagnosisRails: detectedAt.rails,
-            sameInstrumentRetry: detectedAt.retry,
-            ...(razorpay ? { razorpay } : {}),
-          });
-          return { disposition: r.disposition, note: r.note };
-        });
-
-        results.push({ rung: i, retry: true, ...retry });
-
-        if (retry.disposition === 'aborted') {
-          await step.run(`abort-retry-${i}`, async () => {
-            await transitionCase(db, caseId, 'aborted', 'already_paid', { actor: 'workflow' });
-            return { aborted: true };
-          });
-          return { caseId, outcome: 'aborted', at: i, results };
-        }
-      }
     }
 
     // The ladder ran out. Not a failure — the deadline sweep decides whether
     // this becomes `lost`, because a case can still be paid after the last rung.
+    //
+    // Recorded explicitly so a case that ends up sending nothing says so in its
+    // own timeline. Reading `state = executing` and an empty message log and
+    // inferring "the ladder finished" is exactly the guess this event removes.
+    await step.run('ladder-complete', async () => {
+      await appendEvent(db, {
+        caseId,
+        merchantId,
+        kind: 'ladder_complete',
+        actor: 'workflow',
+        payload: { rungs: policy.ladder.length, results },
+      });
+      return { done: true };
+    });
+
     return { caseId, outcome: 'ladder_complete', rungs: policy.ladder.length, results };
   },
 );

@@ -112,10 +112,16 @@ export async function gatherFacts(opts: GatherOptions): Promise<GatheredFacts | 
   //
   // Across every case for this person, and excluding suppressed rows: a holdout
   // record must not consume a real customer's budget.
+  //
+  // The oldest message still in the window comes back from the SAME query as
+  // the count, because the two must describe the same instant. Read separately
+  // they can disagree across a window boundary, and the gate would then sleep
+  // until a slot that had already been taken.
   let recentMessageCount = 0;
+  let oldestMessageInWindowAt: Date | null = null;
   if (c.customerId) {
     const [n] = await db
-      .select({ n: count() })
+      .select({ n: count(), oldest: sql<Date | null>`min(${messageLog.sentAt})` })
       .from(messageLog)
       .where(
         and(
@@ -125,6 +131,7 @@ export async function gatherFacts(opts: GatherOptions): Promise<GatheredFacts | 
         ),
       );
     recentMessageCount = Number(n?.n ?? 0);
+    oldestMessageInWindowAt = n?.oldest ? new Date(n.oldest) : null;
   }
 
   // ── the live-attempt lock ──
@@ -211,6 +218,7 @@ export async function gatherFacts(opts: GatherOptions): Promise<GatheredFacts | 
     liveAttemptWindowMinutes: m.liveAttemptLockMinutes,
     recentMessageCount,
     frequencyCap: m.frequencyCapPerDay,
+    oldestMessageInWindowAt,
     minutesSinceLastTouch,
     minGapMinutes: m.minGapMinutes,
     // Nobody has heard from us about this case yet.

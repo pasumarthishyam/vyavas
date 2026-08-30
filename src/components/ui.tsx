@@ -246,6 +246,27 @@ export function relativeTime(d: Date, now = new Date()): string {
   return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
 }
 
+/**
+ * The same idea as `relativeTime`, but honest about the future.
+ *
+ * `relativeTime` subtracts in one direction only, so anything still to come
+ * lands in its `mins < 1` branch and renders as "just now". That is fine for a
+ * log of things that have happened and actively wrong for a scheduled one: a
+ * retry an hour out would read as though it had already gone.
+ */
+export function whenLabel(d: Date, now = new Date()): string {
+  const ms = d.getTime() - now.getTime();
+  if (ms <= 0) return relativeTime(d, now);
+
+  const mins = Math.round(ms / 60000);
+  if (mins < 1) return 'in under a minute';
+  if (mins < 60) return `in ${mins} min`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `in ${hrs} hr`;
+  const days = Math.round(hrs / 24);
+  return `in ${days} day${days === 1 ? '' : 's'}`;
+}
+
 export function Delta({ pct }: { pct: number | null }) {
   if (pct == null || !Number.isFinite(pct)) return null;
   const up = pct > 0;

@@ -132,6 +132,12 @@ async function main(): Promise<void> {
           liveAttemptWindowMinutes: merchant.liveAttemptLockMinutes,
           recentMessageCount: touches,
           frequencyCap: merchant.frequencyCapPerDay,
+          // The replay walks one case in isolation and counts only the touches
+          // it has itself simulated, so there is no real ledger row to date the
+          // window from. Null makes the cap deferral fall back to its coarse
+          // estimate, which is fine here: replay reports WHETHER a rung is
+          // capped, never when it would clear.
+          oldestMessageInWindowAt: null,
           timeZone: merchant.timezone,
           quietHours: { start: merchant.quietHoursStart, end: merchant.quietHoursEnd },
           merchantBudgetRemaining: merchant.dailyMessageBudget,

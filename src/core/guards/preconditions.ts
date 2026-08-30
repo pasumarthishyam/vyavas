@@ -41,6 +41,22 @@ export interface PreconditionFacts {
   /** Real (unsuppressed) touches in the last 24h, across every case. */
   readonly recentMessageCount: number;
   readonly frequencyCap: number;
+  /**
+   * The OLDEST touch still inside the rolling 24h window. Null when none.
+   *
+   * This is what makes "when does the cap clear?" a fact rather than a guess.
+   * The window is rolling, so the moment a slot frees is exactly 24h after the
+   * oldest message in it — knowable to the second, from a row we already have.
+   *
+   * It matters because the answer decides whether a case lives or dies. The
+   * previous code deferred a capped rung by a flat hour, and the ladder gives a
+   * deferred rung a bounded number of retries; when the real wait was three
+   * hours, the ladder exhausted its patience an hour early, returned
+   * `ladder_complete`, and left the case pinned in `executing` with no timer
+   * pointing at it and nothing sent. Money on the table, no alert, no trace
+   * except four `rung_deferred` rows that all say the same thing.
+   */
+  readonly oldestMessageInWindowAt: Date | null;
 
   /**
    * Minutes since this person last actually heard from us. Null = never.
@@ -203,12 +219,22 @@ export function evaluatePreconditions(
   }
 
   if (required.includes('within_frequency_cap') && facts.recentMessageCount >= facts.frequencyCap) {
-    // The cap is a rolling 24h window, so an hour from now is the soonest it is
-    // worth asking again.
+    // The window is rolling, so a slot frees exactly 24h after the oldest
+    // message still in it. Computed, not guessed — the caller sleeps until this
+    // instant, and a wrong answer here is a dropped case (see the field's note).
+    // The minute of margin keeps us from waking a hair early and re-deferring.
+    const clearsAt =
+      facts.oldestMessageInWindowAt !== null
+        ? new Date(facts.oldestMessageInWindowAt.getTime() + 24 * HOUR + MINUTE)
+        : // No timestamp to reason from — fall back to the old behaviour rather
+          // than inventing one. This should be unreachable: the count is above
+          // the cap, so there is at least one message in the window.
+          new Date(facts.now.getTime() + HOUR);
+
     return defer(
       'within_frequency_cap',
       `already ${facts.recentMessageCount} message(s) in 24h (cap ${facts.frequencyCap})`,
-      new Date(facts.now.getTime() + HOUR),
+      clearsAt,
     );
   }
 
