@@ -4,7 +4,7 @@ import { getDb } from '../../../../../db/client';
 import { merchants } from '../../../../../db/schema/tenancy';
 import { eq, sql } from 'drizzle-orm';
 import { handleWebhookRequest, type MerchantSettings } from '../../../../../ingest/webhook-handler';
-import { loadWebhookSecret } from '../../../../../db/repos/credentials';
+import { loadWebhookSecret, slugCandidates } from '../../../../../db/repos/credentials';
 import { workflowPublisher } from '../../../../../workflows/publish';
 
 /**
@@ -56,7 +56,8 @@ export async function POST(
     .where(sql`deleted_at is null`)
     .orderBy(merchants.createdAt);
 
-  if (!known.some((m) => m.slug === slug)) {
+  const candidates = slugCandidates(slug);
+  if (!known.some((m) => candidates.includes(m.slug))) {
     return NextResponse.json(
       {
         ok: false,
@@ -133,14 +134,22 @@ export async function GET(
   const db = getDb();
 
   const rows = await db
-    .select({ id: merchants.id, name: merchants.name })
+    .select({ id: merchants.id, name: merchants.name, slug: merchants.slug })
     .from(merchants)
-    .where(sql`${merchants.slug} = ${slug} and ${merchants.deletedAt} is null`)
-    .limit(1);
+    .where(sql`${merchants.deletedAt} is null`)
+    .orderBy(merchants.createdAt);
 
-  const merchant = rows.at(0);
+  const candidates = slugCandidates(slug);
+  const merchant = rows.find((m) => candidates.includes(m.slug));
+
   if (!merchant) {
-    return NextResponse.json({ ok: false, reason: 'unknown_merchant', slug }, { status: 404 });
+    // Names the slugs that DO exist. A browser check is the fastest way to
+    // catch a typo'd webhook URL, and it can only do that if it says what the
+    // right answer would have been.
+    return NextResponse.json(
+      { ok: false, reason: 'unknown_merchant', slug, known: rows.map((m) => m.slug) },
+      { status: 404 },
+    );
   }
 
   const secret = await loadWebhookSecret(db, slug);
@@ -148,7 +157,8 @@ export async function GET(
     ok: true,
     endpoint: 'razorpay-webhook',
     merchant: merchant.name,
-    slug,
+    slug: merchant.slug,
+    requestedPath: slug,
     // Stated plainly so a misconfigured endpoint is visible from a browser
     // rather than discovered when a delivery is rejected at 3am.
     secretConfigured: secret !== null,

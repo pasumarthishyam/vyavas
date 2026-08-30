@@ -45,6 +45,10 @@ export interface ClientOptions {
   max?: number;
   idleTimeout?: number;
   connectTimeout?: number;
+  /** Seconds before a connection is retired regardless of health. */
+  maxLifetime?: number;
+  /** Postgres aborts any statement running longer than this. */
+  statementTimeoutMs?: number;
 }
 
 export function createClient(opts: ClientOptions = {}) {
@@ -56,6 +60,38 @@ export function createClient(opts: ClientOptions = {}) {
     max: opts.max ?? 1,
     idle_timeout: opts.idleTimeout ?? 20,
     connect_timeout: opts.connectTimeout ?? 10,
+
+    /**
+     * Recycle connections, and never let a query hang forever.
+     *
+     * These two exist because of a failure that is invisible until production
+     * and then looks like nothing at all: requests that hang, on no particular
+     * route, moving around between deploys, with a healthy database and no
+     * locks held.
+     *
+     * The cause is the combination of a module-scoped client and a serverless
+     * platform. `getDb()` memoises the client so warm invocations reuse it —
+     * correct, and much faster than reconnecting. But between invocations the
+     * instance is frozen, and Supavisor (or any hop in between) is free to drop
+     * an idle connection without the frozen process ever seeing the FIN. The
+     * next invocation writes to a socket nobody is listening on and waits.
+     * There is no error to log, because nothing failed; it simply never
+     * answers, until the platform kills the request.
+     *
+     *   max_lifetime      a connection is retired after 5 minutes regardless of
+     *                     health, so a half-dead socket cannot outlive one
+     *                     deployment's idle period.
+     *   statement_timeout Postgres aborts any single statement past 15s. A
+     *                     query that cannot finish becomes a fast, loud error
+     *                     instead of a hung request — which also converts a
+     *                     contended advisory lock from "hangs" into "fails and
+     *                     retries", the behaviour the ladder already handles.
+     */
+    max_lifetime: opts.maxLifetime ?? 60 * 5,
+    connection: {
+      statement_timeout: opts.statementTimeoutMs ?? 15_000,
+    },
+
     // Money is read as integer paise; never let a driver hand back a float.
     types: {
       bigint: postgres.BigInt,

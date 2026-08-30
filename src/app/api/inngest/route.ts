@@ -19,7 +19,30 @@ export const dynamic = 'force-dynamic';
 // walks a small enough batch to finish well inside this.
 export const maxDuration = 60;
 
+/**
+ * Where Inngest should call us back.
+ *
+ * Pinned, not derived. Left to itself the SDK works out its own public URL from
+ * the incoming request, and behind Vercel's apex→www redirect it derived the
+ * APEX — so it registered `https://vyavas.com/api/inngest`, a URL that answers
+ * every request with a 308. Inngest's `/fn/register` rejected that with a 400,
+ * our route relayed the 400, and the sync retried every five seconds
+ * indefinitely.
+ *
+ * Nothing in that failure names a URL: the Vercel log shows `PUT 400` on a
+ * route that is working perfectly, and the only trace of the real cause is the
+ * `Referer` header and an outbound call to api.inngest.com in the request
+ * detail.
+ *
+ * `APP_URL` is the same origin used for payment-link callbacks, so the two
+ * cannot drift apart. It must be the canonical host — the one that does NOT
+ * redirect.
+ */
+const origin = process.env.APP_URL ?? 'https://www.vyavas.com';
+
 export const { GET, POST, PUT } = serve({
   client: inngest,
   functions: [runLadder, sweepDeadlines],
+  serveOrigin: origin,
+  servePath: '/api/inngest',
 });

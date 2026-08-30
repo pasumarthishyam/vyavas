@@ -27,7 +27,7 @@
  * on someone else's fallback key is visible rather than assumed.
  */
 
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 
 import type { Database } from '../client.js';
 import { merchants, razorpayConnections } from '../schema/tenancy.js';
@@ -151,6 +151,26 @@ export async function loadMerchantCredentials(
  * payload can be trusted, and the caller at that point knows only which URL the
  * delivery arrived on.
  */
+/**
+ * Slugs a URL path is allowed to mean.
+ *
+ * A webhook URL is typed into a payment provider's dashboard once and then
+ * forgotten. Renaming a merchant silently 404s every delivery from that moment
+ * on, and the only symptom is cases that stop appearing — Razorpay retries a
+ * few times, gives up, and the money is simply never recovered.
+ *
+ * So a `rzp-` prefix is optional in the path: `rzp-tradesmetrix` and
+ * `tradesmetrix` both resolve to the same merchant. It costs one extra
+ * comparison and removes an entire class of silent outage. It is NOT a security
+ * relaxation — the signature is still verified against that merchant's own
+ * secret, so naming the right merchant is necessary and nowhere near
+ * sufficient.
+ */
+export function slugCandidates(slug: string): string[] {
+  const bare = slug.replace(/^rzp-/, '');
+  return Array.from(new Set([slug, bare, `rzp-${bare}`]));
+}
+
 export async function loadWebhookSecret(
   db: Database,
   slug: string,
@@ -165,7 +185,7 @@ export async function loadWebhookSecret(
         eq(razorpayConnections.status, 'active'),
       ),
     )
-    .where(eq(merchants.slug, slug))
+    .where(inArray(merchants.slug, slugCandidates(slug)))
     .limit(1);
 
   const row = rows.at(0);

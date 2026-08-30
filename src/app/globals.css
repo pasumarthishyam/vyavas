@@ -1709,7 +1709,57 @@ table.data tbody tr:last-child td {
   color: rgb(252 165 165);
 }
 
-/* Collapsed sidebar: the switcher would have nowhere to render its name. */
-[data-sidebar='collapsed'] .sidebar-switcher {
+/* ── collapsed sidebar ───────────────────────────────────────────────────────
+   The switcher STAYS. Hiding it with `display: none` removed a 44px row from
+   the flow, so every nav item jumped up on collapse and back down on expand —
+   the sidebar changed shape rather than changing width, which reads as the page
+   breaking rather than a panel resizing.
+
+   It shrinks to the same square footprint as a collapsed nav item instead, so
+   the vertical rhythm is identical in both states and only the width animates. */
+:root[data-sidebar='collapsed'] .sidebar-switcher {
+  padding: 0 10px 10px;
+}
+
+:root[data-sidebar='collapsed'] .switcher-face {
+  justify-content: center;
+  padding: 8px;
+}
+
+:root[data-sidebar='collapsed'] .switcher-name,
+:root[data-sidebar='collapsed'] .switcher-caret,
+:root[data-sidebar='collapsed'] .mode-chip-flag {
   display: none;
+}
+
+/* The mode chip becomes a dot: the one fact worth keeping at 68px wide is
+   whether this account can reach real customers. */
+:root[data-sidebar='collapsed'] .mode-chip {
+  width: 8px;
+  height: 8px;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 0;
+  line-height: 0;
+  overflow: hidden;
+  background: currentColor;
+}
+
+/* The menu still needs room to show names, so it escapes the rail. */
+:root[data-sidebar='collapsed'] .switcher-menu {
+  left: 8px;
+  right: auto;
+  width: 200px;
+}
+
+/* Width is the only thing that should move. Without this the whole grid snaps
+   between two layouts on every toggle. */
+.shell {
+  transition: grid-template-columns 160ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shell {
+    transition: none;
+  }
 }
