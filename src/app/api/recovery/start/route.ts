@@ -45,7 +45,7 @@ function deadline<T>(work: Promise<T>, ms: number): Promise<T | 'timed-out'> {
 }
 
 export async function POST(request: Request): Promise<NextResponse> {
-  const body = (await request.json().catch(() => ({}))) as { caseId?: string };
+  const body = (await request.json().catch(() => ({}))) as { caseId?: string; force?: boolean };
   if (!body.caseId) {
     return NextResponse.json({ ok: false, reason: 'caseId is required' }, { status: 400 });
   }
@@ -69,7 +69,13 @@ export async function POST(request: Request): Promise<NextResponse> {
       );
     }
 
-    const result = await deadline(startRecovery(db, body.caseId), BUDGET_MS);
+    // `force` only ever arrives from an explicit confirm in the console. It
+    // relaxes the duplicate guard and nothing else — every other precondition,
+    // including consent and the kill switch, is evaluated exactly as normal.
+    const result = await deadline(
+      startRecovery(db, body.caseId, { force: body.force === true }),
+      BUDGET_MS,
+    );
 
     if (result === 'timed-out') {
       return NextResponse.json(

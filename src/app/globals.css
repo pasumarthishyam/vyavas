@@ -1763,3 +1763,431 @@ table.data tbody tr:last-child td {
     transition: none;
   }
 }
+
+/* ─── the recovery console ────────────────────────────────────────────────── */
+/*
+ * A panel with its own toolbar and a dense table, rather than a stack of cards.
+ *
+ * The card layout it replaced was legible at three cases and unusable at thirty:
+ * a merchant doing fifty failures a day got a page metres long with no way to
+ * find the large amounts among the small ones. Density is the feature here —
+ * the table has to stay scannable at fifty rows, which means one line per case,
+ * tabular figures so magnitudes compare down the column, and everything not
+ * needed for a decision moved to the case page.
+ */
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 13px 16px;
+  border-bottom: 1px solid transparent;
+}
+
+.panel-toggle {
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s var(--ease);
+}
+
+.panel-toggle:hover {
+  background: var(--surface-hover);
+}
+
+.panel-toggle[aria-expanded='true'] {
+  border-bottom-color: var(--hairline);
+}
+
+.panel-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 550;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+
+/* Scoped: the shared .toolbar carries a bottom margin that makes no sense
+   once it is a panel header rather than a floating row of chips. */
+.panel .toolbar {
+  margin-bottom: 0;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--hairline);
+  gap: 10px;
+}
+
+.toolbar-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 240px;
+  min-width: 180px;
+  padding: 0 10px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--hairline);
+  background: var(--surface-sunken);
+  color: var(--ink-muted);
+  transition: border-color 0.14s var(--ease);
+}
+
+.toolbar-search:focus-within {
+  border-color: var(--hairline-strong);
+}
+
+.toolbar-search input {
+  flex: 1;
+  border: 0;
+  outline: 0;
+  background: none;
+  font-size: 13px;
+  color: var(--ink);
+  min-width: 0;
+}
+
+.toolbar-search input::placeholder {
+  color: var(--ink-muted);
+}
+
+/* The filter row is secondary to the search box, so it sits a size down. */
+.segmented-sm .segment {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.toolbar-sort select {
+  height: 32px;
+  padding: 0 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--hairline);
+  background: var(--surface-sunken);
+  color: var(--ink-secondary);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.toolbar-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+}
+
+.toolbar-count {
+  font-size: 12.5px;
+  color: var(--ink-secondary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 11px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--hairline);
+  background: var(--surface);
+  color: var(--ink-secondary);
+  font-size: 12.5px;
+  white-space: nowrap;
+  transition:
+    border-color 0.14s var(--ease),
+    color 0.14s var(--ease);
+}
+
+.refresh:hover:not(:disabled) {
+  border-color: var(--hairline-strong);
+  color: var(--ink);
+}
+
+.refresh:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.refresh-busy svg {
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .refresh-busy svg {
+    animation: none;
+  }
+}
+
+/* ── the case table ── */
+
+.panel .table-wrap {
+  margin: 0;
+  padding: 0;
+}
+
+table.data-cases th:first-child,
+table.data-cases td:first-child {
+  padding-left: 16px;
+}
+
+table.data-cases th:last-child,
+table.data-cases td:last-child {
+  padding-right: 16px;
+}
+
+table.data-cases th {
+  padding-top: 10px;
+  background: var(--surface);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+table.data-cases td {
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
+.amount-cell {
+  font-size: 14px;
+  font-weight: 550;
+  letter-spacing: -0.01em;
+}
+
+.amount-cell a {
+  color: inherit;
+}
+
+.amount-cell a:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.cell-main {
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.cell-sub {
+  color: var(--ink-muted);
+  font-size: 11.5px;
+  margin-top: 1px;
+}
+
+.reach-pair {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Icon-only in the table: the address is in the tooltip and the sub-line, and
+   two full contact pills per row is what made the old card so tall. */
+.reach-pair .reach {
+  padding: 3px 6px;
+}
+
+.nowrap {
+  white-space: nowrap;
+}
+
+.row-action {
+  text-align: right;
+}
+
+/* A case inside its last few hours. The left rule carries the urgency so it
+   survives greyscale and does not rely on text colour alone. */
+.row-urgent td:first-child {
+  box-shadow: inset 2px 0 0 var(--critical);
+}
+
+.btn-sm {
+  padding: 6px 13px;
+  font-size: 12.5px;
+}
+
+.btn-ghost {
+  padding: 8px 15px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--hairline);
+  background: var(--surface);
+  color: var(--ink-secondary);
+  font-size: 13px;
+  transition:
+    border-color 0.14s var(--ease),
+    color 0.14s var(--ease);
+}
+
+.btn-ghost:hover {
+  border-color: var(--hairline-strong);
+  color: var(--ink);
+}
+
+.link-btn {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  font: inherit;
+}
+
+.show-more {
+  display: block;
+  width: 100%;
+  padding: 11px;
+  border-top: 1px solid var(--hairline);
+  background: var(--surface);
+  color: var(--ink-secondary);
+  font-size: 12.5px;
+  transition:
+    background 0.12s var(--ease),
+    color 0.12s var(--ease);
+}
+
+.show-more:hover {
+  background: var(--surface-hover);
+  color: var(--ink);
+}
+
+/* ── the success half of the notice pair ── */
+/* Critical already existed; this is its counterpart, so a completed action is
+   confirmed rather than leaving the page looking like nothing happened. */
+.notice-ok {
+  border-color: rgba(12, 163, 12, 0.3);
+  background: rgba(12, 163, 12, 0.07);
+}
+
+.notice-ok svg {
+  color: var(--good-text);
+}
+
+/* ── confirm overlay ── */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+}
+
+.overlay-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(11, 11, 11, 0.34);
+  backdrop-filter: blur(2px);
+}
+
+.overlay-card {
+  position: relative;
+  width: min(440px, 100%);
+  background: var(--surface);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
+  padding: 22px;
+}
+
+.overlay-card h2 {
+  font-size: 16px;
+  font-weight: 560;
+  letter-spacing: -0.015em;
+  margin-bottom: 10px;
+}
+
+.overlay-card p {
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--ink-secondary);
+  margin-bottom: 10px;
+}
+
+.overlay-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+/* ── the error boundary ── */
+/*
+ * Replaces the bare white "Application error" page. The retry is the whole
+ * point: the failure this most often catches is a stale pooled connection,
+ * which is discarded on timeout, so the next attempt genuinely does work.
+ */
+.boundary {
+  display: grid;
+  place-items: center;
+  min-height: 60vh;
+  padding: 24px;
+}
+
+.boundary-card {
+  max-width: 460px;
+  text-align: center;
+}
+
+.boundary-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  background: rgba(208, 59, 59, 0.1);
+  color: var(--critical);
+  margin-bottom: 14px;
+}
+
+.boundary-card h1 {
+  font-size: 18px;
+  font-weight: 560;
+  letter-spacing: -0.02em;
+  margin-bottom: 8px;
+}
+
+.boundary-card p {
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--ink-secondary);
+}
+
+.boundary-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 18px;
+}
+
+.boundary-meta {
+  margin-top: 16px;
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}

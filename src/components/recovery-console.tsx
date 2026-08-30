@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { inr, causeLabel, relativeTime, whenLabel, Stat } from './ui';
 import type {
@@ -14,26 +14,26 @@ import type { SendMode } from '../app/api/recovery/execution/route';
 /*
  * The recovery console.
  *
- * One job: start a recovery on one case and watch what happens. Everything on
- * screen is either a case you can act on, the switch that decides whether
- * anything sends, or the record of what did.
+ * One job: see every case that needs acting on, and act on it.
  *
- * Three all-time numbers set the scene — open cases, failure classes, recovered
- * — but deliberately no charts, filters or date ranges. Those live on the
- * Overview page. A console that also tries to be a dashboard makes the button
- * harder to find, and the button is the whole point.
+ * ── why this is a table and not a stack of cards ──
+ *
+ * It was cards: one large panel per case, amount set in display type, every
+ * attribute on its own line. That reads beautifully with three cases and falls
+ * apart at thirty. A merchant doing fifty failures a day — an ordinary Tuesday
+ * for a mid-size store — got a page metres long, no way to find the ₹40,000 one
+ * among the ₹300 ones, and no way to see at a glance how much was at stake.
+ *
+ * Density is not a cosmetic choice here, it is the feature. A row per case, the
+ * amount right-aligned so magnitudes line up and compare down the column, and
+ * everything that is not needed for a decision moved to the case page. Fifty
+ * rows fit in two screens and sort in one click.
+ *
+ * What is deliberately NOT here: charts, date ranges, revenue trends. Those are
+ * the Overview page's job. A console that also tries to be a dashboard buries
+ * the one control that matters.
  */
 
-/**
- * Where messages land, read from the merchant's own routing columns — the same
- * values the senders read.
- *
- * It used to be read from environment variables, which meant the banner could
- * report "diverted" while the sender was doing the opposite: the diversion was
- * disabled under NODE_ENV=production, but the banner did not know that, so the
- * one surface whose job is to tell you where messages go was confidently wrong
- * in exactly the situation that mattered.
- */
 interface Routing {
   whatsappRedirectTo: string | null;
   emailRedirectTo: string | null;
@@ -41,33 +41,36 @@ interface Routing {
 }
 
 interface Payload {
-  merchant: ConsoleMerchant;
+  merchant: ConsoleMerchant | null;
   routing?: Routing;
   cases: RecoverableCase[];
   activity: ActivityRow[];
   summary: RecoverySummary;
   now: string;
+  /** True when the server render could not reach the database. */
+  degraded?: boolean;
 }
 
-const POLL_MS = 2500;
-
-/**
- * How long a failure notice stays up.
- *
- * It used to stay up forever — `setError` was only ever cleared by starting
- * another recovery — so a 45s timeout from four hours ago sat above a page that
- * had been polling happily ever since, describing a request nobody could still
- * remember making. A banner that outlives its fact is worse than no banner: it
- * sends you to look for a problem that is no longer there.
- */
+const POLL_MS = 4000;
 const NOTICE_TTL_MS = 90_000;
-
-/** Consecutive failed polls before the page admits it has stopped updating. */
 const STALE_AFTER_POLLS = 3;
+/** Rows drawn before "show more". Enough for a normal day, not enough to hang. */
+const PAGE_SIZE = 25;
+
+type Filter = 'all' | 'ready' | 'touched' | 'blocked';
+type Sort = 'amount' | 'newest' | 'deadline';
 
 interface Notice {
   message: string;
   at: number;
+  tone: 'error' | 'ok';
+}
+
+/** A case whose send was refused only because it already went out once. */
+interface Confirm {
+  caseId: string;
+  amountPaise: number;
+  detail: string;
 }
 
 export function RecoveryConsole({ initial }: { initial: Payload }) {
@@ -76,14 +79,23 @@ export function RecoveryConsole({ initial }: { initial: Payload }) {
   const [notice, setNotice] = useState<Notice | null>(null);
   const [stalled, setStalled] = useState<string | null>(null);
   const [pending, setPending] = useState<Record<string, string>>({});
+  const [confirm, setConfirm] = useState<Confirm | null>(null);
+
+  const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState<Filter>('all');
+  const [sort, setSort] = useState<Sort>('amount');
+  const [limit, setLimit] = useState(PAGE_SIZE);
+  const [refreshing, setRefreshing] = useState(false);
+  const [syncedAt, setSyncedAt] = useState<number>(() => Date.now());
+
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const misses = useRef(0);
 
-  const fail = useCallback((message: string) => {
-    setNotice({ message, at: Date.now() });
+  const say = useCallback((message: string, tone: Notice['tone'] = 'error') => {
+    setNotice({ message, at: Date.now(), tone });
   }, []);
 
-  const poll = useCallback(async () => {
+  const poll = useCallback(async (): Promise<void> => {
     try {
       const res = await fetch('/api/recovery/status', { cache: 'no-store' });
 
@@ -92,13 +104,12 @@ export function RecoveryConsole({ initial }: { initial: Payload }) {
         setStalled(null);
         const next = (await res.json()) as Payload;
         setData(next);
+        setSyncedAt(Date.now());
         // A case stays "pending" from the moment its follow-up is scheduled
-        // until the countdown hits zero — past that, without this, it shows
-        // "email sending…" forever, because nothing ever told it the email
-        // actually left. Clear it once that case's email appears in the
-        // activity log, whatever the outcome.
+        // until its email actually appears in the log — otherwise it reads
+        // "email sending…" forever, because nothing ever told it the email left.
         setPending((p) => {
-          const stillPending = Object.fromEntries(
+          const still = Object.fromEntries(
             Object.entries(p).filter(
               ([caseId]) =>
                 !next.activity.some(
@@ -106,12 +117,9 @@ export function RecoveryConsole({ initial }: { initial: Payload }) {
                 ),
             ),
           );
-          return Object.keys(stillPending).length === Object.keys(p).length ? p : stillPending;
+          return Object.keys(still).length === Object.keys(p).length ? p : still;
         });
       } else {
-        // A 503 here means the database stopped answering and the stale
-        // connection has been dropped; the next poll reconnects. Say so only
-        // once it has actually persisted — see below.
         misses.current += 1;
         const body = (await res.json().catch(() => ({}))) as { reason?: string };
         if (misses.current >= STALE_AFTER_POLLS) {
@@ -119,82 +127,113 @@ export function RecoveryConsole({ initial }: { initial: Payload }) {
         }
       }
     } catch {
-      // One dropped poll is not worth surfacing — the next is 2.5s away, and a
-      // banner that flashes on every network blip trains people to ignore it.
-      // Several in a row IS worth surfacing: silence is exactly how a page that
-      // has stopped updating passes for one that has nothing to report.
+      // One dropped poll is not worth surfacing. Several in a row is: silence
+      // is exactly how a page that has stopped updating passes for one with
+      // nothing to report.
       misses.current += 1;
       if (misses.current >= STALE_AFTER_POLLS) {
         setStalled('Not reaching the server. This page has stopped updating.');
       }
     }
-    timer.current = setTimeout(() => void poll(), POLL_MS);
   }, []);
 
-  // Expire the notice on a timer rather than at the next render, so it is
-  // readable for a while and then gone for good.
+  /** Schedule the next poll after the current one settles, never on a fixed drum. */
+  const loop = useCallback(async (): Promise<void> => {
+    await poll();
+    timer.current = setTimeout(() => void loop(), POLL_MS);
+  }, [poll]);
+
+  useEffect(() => {
+    timer.current = setTimeout(() => void loop(), POLL_MS);
+    return () => {
+      if (timer.current) clearTimeout(timer.current);
+    };
+  }, [loop]);
+
   useEffect(() => {
     if (!notice) return;
     const id = setTimeout(() => setNotice(null), NOTICE_TTL_MS);
     return () => clearTimeout(id);
   }, [notice]);
 
-  useEffect(() => {
-    timer.current = setTimeout(() => void poll(), POLL_MS);
-    return () => {
-      if (timer.current) clearTimeout(timer.current);
-    };
-  }, [poll]);
+  /**
+   * Manual refresh.
+   *
+   * The page already polls, so this is not strictly load-bearing — but a poll
+   * you cannot see and cannot trigger is indistinguishable from a page that has
+   * frozen, and the honest answer to "is this current?" was previously to
+   * reload the whole document. The button restarts the timer as well as
+   * fetching, so an impatient click does not leave two loops running.
+   */
+  const refresh = useCallback(async () => {
+    if (timer.current) clearTimeout(timer.current);
+    setRefreshing(true);
+    try {
+      await poll();
+    } finally {
+      setRefreshing(false);
+      timer.current = setTimeout(() => void loop(), POLL_MS);
+    }
+  }, [poll, loop]);
 
-  async function start(caseId: string) {
+  async function start(caseId: string, force = false) {
     setBusy(caseId);
     setNotice(null);
 
-    // A start can genuinely take a few seconds — it creates a payment link on
-    // the merchant's Razorpay account before it can compose. But without a
-    // deadline a request that never returns leaves the button reading
-    // "Starting…" forever, which tells you nothing at all: no error, no state
-    // change, nothing in the log to search for. A silent hang is the worst
-    // failure this page can have, because it is the one you cannot report.
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 45_000);
+    const abort = setTimeout(() => controller.abort(), 45_000);
 
     try {
       const res = await fetch('/api/recovery/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ caseId }),
+        body: JSON.stringify({ caseId, force }),
         signal: controller.signal,
       });
 
       // A 500 from a crashed route returns HTML, and `.json()` on HTML throws a
-      // parse error that reads like a bug in this component rather than what it
-      // is. Report the status instead.
+      // parse error that reads like a bug in this component. Report the status.
       const text = await res.text();
-      let json: { ok?: boolean; reason?: string; followUpAt?: string | null };
+      let json: {
+        ok?: boolean;
+        reason?: string;
+        followUpAt?: string | null;
+        alreadySent?: boolean;
+      };
       try {
         json = JSON.parse(text) as typeof json;
       } catch {
-        fail(`Server returned ${res.status} — ${text.slice(0, 120) || 'no body'}`);
+        say(`Server returned ${res.status} — ${text.slice(0, 120) || 'no body'}`);
         return;
       }
 
-      if (!json.ok) fail(json.reason ?? `Could not start (HTTP ${res.status})`);
-      else if (json.followUpAt) setPending((p) => ({ ...p, [caseId]: json.followUpAt! }));
+      if (json.ok) {
+        say(force ? 'Sent again.' : 'Recovery started.', 'ok');
+        if (json.followUpAt) setPending((p) => ({ ...p, [caseId]: json.followUpAt! }));
+      } else if (json.alreadySent && !force) {
+        // Not a dead end — an override a person is allowed to make, with the
+        // consequence stated before they make it.
+        const c = data.cases.find((x) => x.id === caseId);
+        setConfirm({
+          caseId,
+          amountPaise: c?.amountPaise ?? 0,
+          detail: json.reason ?? 'This case has already been sent.',
+        });
+      } else {
+        say(json.reason ?? `Could not start (HTTP ${res.status})`);
+      }
+
       await poll();
     } catch (e) {
-      fail(
+      say(
         e instanceof DOMException && e.name === 'AbortError'
-          ? // The route now holds its own 38s budget and answers with a reason,
-            // so reaching this at all means the request never got that far.
-            'No response in 45s. The server should have answered by 38s, so it never ' +
-            'reached the route — check the activity log below before retrying.'
+          ? 'No response in 45s. The server holds its own 38s budget, so it never reached the route.'
           : e instanceof Error
             ? e.message
             : 'Request failed',
       );
     } finally {
-      clearTimeout(timer);
+      clearTimeout(abort);
       setBusy(null);
     }
   }
@@ -206,39 +245,83 @@ export function RecoveryConsole({ initial }: { initial: Payload }) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ mode }),
     });
-    await poll();
+    await refresh();
   }
 
-  const mode: SendMode = !data.merchant.executionEnabled
+  const merchant = data.merchant;
+  const mode: SendMode = !merchant?.executionEnabled
     ? 'off'
-    : data.merchant.dryRun
+    : merchant.dryRun
       ? 'dry_run'
       : 'live';
   const live = mode === 'live';
   const canStart = mode !== 'off';
-  const total = data.cases.reduce((s, c) => s + c.amountPaise, 0);
+
+  // ── the visible set ──
+  const shown = useMemo(() => {
+    const q = query.trim().toLowerCase();
+
+    const matches = data.cases.filter((c) => {
+      const blocked = c.optedOut || (!c.hasPhone && !c.hasEmail);
+      if (filter === 'ready' && (blocked || c.messagesSent > 0)) return false;
+      if (filter === 'touched' && c.messagesSent === 0) return false;
+      if (filter === 'blocked' && !blocked) return false;
+
+      if (!q) return true;
+      // Amount is searched as digits so "9588" finds ₹9,588 without the user
+      // having to guess the formatting.
+      return [
+        String(Math.round(c.amountPaise / 100)),
+        causeLabel(c.causeClass),
+        c.errorReason ?? '',
+        c.method,
+        c.bank ?? '',
+        c.customerName ?? '',
+        c.emailMasked ?? '',
+        c.phoneMasked ?? '',
+      ]
+        .join(' ')
+        .toLowerCase()
+        .includes(q);
+    });
+
+    const sorted = [...matches].sort((a, b) => {
+      if (sort === 'amount') return b.amountPaise - a.amountPaise;
+      if (sort === 'newest') return +new Date(b.createdAt) - +new Date(a.createdAt);
+      const ad = a.deadlineAt ? +new Date(a.deadlineAt) : Infinity;
+      const bd = b.deadlineAt ? +new Date(b.deadlineAt) : Infinity;
+      return ad - bd;
+    });
+
+    return sorted;
+  }, [data.cases, query, filter, sort]);
+
+  const atRisk = data.cases.reduce((s, c) => s + c.amountPaise, 0);
+  const shownRisk = shown.reduce((s, c) => s + c.amountPaise, 0);
+  const readyCount = data.cases.filter(
+    (c) => !(c.optedOut || (!c.hasPhone && !c.hasEmail)) && c.messagesSent === 0,
+  ).length;
 
   return (
     <>
       <div className="page-head">
         <div>
-          <div className="eyebrow">{data.merchant.name}</div>
+          <div className="eyebrow">{merchant?.name ?? 'Recovery'}</div>
           <h1>Recovery</h1>
         </div>
-
-        <ModeSwitch mode={mode} onChange={setMode} />
+        <ModeSwitch mode={mode} onChange={setMode} disabled={!merchant} />
       </div>
 
-      <div className="grid grid-3" style={{ marginBottom: 24 }}>
+      <div className="grid grid-3" style={{ marginBottom: 20 }}>
         <Stat
-          label="Open cases"
-          value={String(data.cases.length)}
-          foot={data.cases.length === 0 ? 'nothing open' : inr(total)}
+          label="At risk"
+          value={inr(atRisk)}
+          foot={`${data.cases.length} open case${data.cases.length === 1 ? '' : 's'}`}
         />
         <Stat
-          label="Failure classes"
-          value={String(data.summary.failureClasses)}
-          foot={data.cases.length === 0 ? '—' : 'across open cases'}
+          label="Needs a first touch"
+          value={String(readyCount)}
+          foot={readyCount === 0 ? 'all contacted' : 'not yet messaged'}
         />
         <Stat
           label="Recovered"
@@ -247,42 +330,37 @@ export function RecoveryConsole({ initial }: { initial: Payload }) {
         />
       </div>
 
-      {/*
-        Timestamped, so it cannot quietly become a description of something
-        that stopped being true hours ago.
-      */}
       {notice && (
-        <div className="notice notice-critical">
-          <WarnIcon />
+        <div className={`notice${notice.tone === 'error' ? ' notice-critical' : ' notice-ok'}`}>
+          {notice.tone === 'error' ? <WarnIcon /> : <CheckIcon />}
           <span>
-            {notice.message}{' '}
-            <span className="subtle">· {relativeTime(new Date(notice.at))}</span>
+            {notice.message} <span className="subtle">· {relativeTime(new Date(notice.at))}</span>
           </span>
         </div>
       )}
 
-      {/*
-        Separate from the notice above, because it says something different: not
-        "an action failed" but "everything you are looking at may be out of
-        date". Without it a page whose polls are all failing looks identical to
-        a page where nothing is happening.
-      */}
       {stalled && (
         <div className="notice notice-critical">
           <WarnIcon />
           <span>
-            {stalled} Showing the last data received — it may be stale. Retrying every{' '}
-            {POLL_MS / 1000}s.
+            {stalled} Showing the last data received — it may be stale.{' '}
+            <button type="button" className="link-btn" onClick={() => void refresh()}>
+              Retry now
+            </button>
           </span>
         </div>
       )}
 
-      {/*
-        Where messages actually land, stated before the switch is thrown.
-        "Sending is on" is not enough information: the same switch either
-        diverts everything to one test phone or reaches a real customer, and
-        which one it is cannot be inferred from the UI.
-      */}
+      {data.degraded && !stalled && (
+        <div className="notice">
+          <InfoIcon />
+          <span>
+            This page loaded before the database answered. It is refreshing itself — nothing is
+            wrong with your data.
+          </span>
+        </div>
+      )}
+
       <Routing routing={data.routing} live={live} />
 
       {mode === 'off' && data.cases.length > 0 && (
@@ -296,51 +374,448 @@ export function RecoveryConsole({ initial }: { initial: Payload }) {
         </div>
       )}
 
-      <section className="stack" style={{ marginTop: 24 }}>
-        {data.cases.length === 0 ? (
-          <div className="empty">
-            <div className="empty-title">No open cases</div>
-            <div className="empty-body">
-              Run <span className="mono">npm run backfill</span> to pull failures from a connected
-              Razorpay account, or wait for a live webhook.
-            </div>
-          </div>
-        ) : (
-          data.cases.map((c) => (
-            <CaseCard
+      <section className="panel" style={{ marginTop: 20 }}>
+        <Toolbar
+          query={query}
+          onQuery={(v) => {
+            setQuery(v);
+            setLimit(PAGE_SIZE);
+          }}
+          filter={filter}
+          onFilter={(f) => {
+            setFilter(f);
+            setLimit(PAGE_SIZE);
+          }}
+          sort={sort}
+          onSort={setSort}
+          shown={shown.length}
+          total={data.cases.length}
+          shownRisk={shownRisk}
+          refreshing={refreshing}
+          onRefresh={() => void refresh()}
+          syncedAt={syncedAt}
+        />
+
+        <CaseTable
+          rows={shown.slice(0, limit)}
+          live={live}
+          canStart={canStart}
+          busy={busy}
+          pending={pending}
+          now={data.now}
+          onStart={(id) => void start(id)}
+          emptyReason={
+            data.cases.length === 0
+              ? 'no-cases'
+              : shown.length === 0
+                ? 'no-matches'
+                : null
+          }
+        />
+
+        {shown.length > limit && (
+          <button
+            type="button"
+            className="show-more"
+            onClick={() => setLimit((n) => n + PAGE_SIZE)}
+          >
+            Show {Math.min(PAGE_SIZE, shown.length - limit)} more · {shown.length - limit} remaining
+          </button>
+        )}
+      </section>
+
+      <Activity rows={data.activity} />
+
+      {confirm && (
+        <ConfirmResend
+          confirm={confirm}
+          live={live}
+          onCancel={() => setConfirm(null)}
+          onConfirm={() => {
+            const id = confirm.caseId;
+            setConfirm(null);
+            void start(id, true);
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+/* ── toolbar ─────────────────────────────────────────────────────────────── */
+
+function Toolbar({
+  query,
+  onQuery,
+  filter,
+  onFilter,
+  sort,
+  onSort,
+  shown,
+  total,
+  shownRisk,
+  refreshing,
+  onRefresh,
+  syncedAt,
+}: {
+  query: string;
+  onQuery: (v: string) => void;
+  filter: Filter;
+  onFilter: (f: Filter) => void;
+  sort: Sort;
+  onSort: (s: Sort) => void;
+  shown: number;
+  total: number;
+  shownRisk: number;
+  refreshing: boolean;
+  onRefresh: () => void;
+  syncedAt: number;
+}) {
+  const FILTERS: { value: Filter; label: string }[] = [
+    { value: 'all', label: 'All' },
+    { value: 'ready', label: 'Needs a touch' },
+    { value: 'touched', label: 'Contacted' },
+    { value: 'blocked', label: 'Unreachable' },
+  ];
+
+  return (
+    <div className="toolbar">
+      <div className="toolbar-search">
+        <SearchIcon />
+        <input
+          type="search"
+          value={query}
+          onChange={(e) => onQuery(e.target.value)}
+          placeholder="Search amount, cause, customer…"
+          aria-label="Search cases"
+        />
+      </div>
+
+      <div className="segmented segmented-sm" role="group" aria-label="Filter cases">
+        {FILTERS.map((f) => (
+          <button
+            key={f.value}
+            type="button"
+            aria-pressed={filter === f.value}
+            className={`segment${filter === f.value ? ' segment-on' : ''}`}
+            onClick={() => onFilter(f.value)}
+          >
+            {f.label}
+          </button>
+        ))}
+      </div>
+
+      <label className="toolbar-sort">
+        <span className="visually-hidden">Sort by</span>
+        <select value={sort} onChange={(e) => onSort(e.target.value as Sort)}>
+          <option value="amount">Largest first</option>
+          <option value="newest">Newest first</option>
+          <option value="deadline">Closing soonest</option>
+        </select>
+      </label>
+
+      <div className="toolbar-meta">
+        <span className="toolbar-count">
+          {shown === total ? `${total}` : `${shown} of ${total}`}
+          {shown > 0 && <span className="subtle"> · {inr(shownRisk)}</span>}
+        </span>
+        <RefreshButton refreshing={refreshing} onRefresh={onRefresh} syncedAt={syncedAt} />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Refresh, with the freshness stated next to it.
+ *
+ * The label is the point. "Refresh" alone invites a click every few seconds
+ * because nothing on screen says whether the data is already current; naming
+ * the age answers that question without a click, and most of the time stops the
+ * click happening at all.
+ */
+function RefreshButton({
+  refreshing,
+  onRefresh,
+  syncedAt,
+}: {
+  refreshing: boolean;
+  onRefresh: () => void;
+  syncedAt: number;
+}) {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => tick((n) => n + 1), 5000);
+    return () => clearInterval(id);
+  }, []);
+
+  const age = Math.round((Date.now() - syncedAt) / 1000);
+  const label = refreshing ? 'Refreshing…' : age < 8 ? 'Up to date' : `${age}s ago`;
+
+  return (
+    <button
+      type="button"
+      className={`refresh${refreshing ? ' refresh-busy' : ''}`}
+      onClick={onRefresh}
+      disabled={refreshing}
+      title="Fetch the latest cases now"
+    >
+      <RefreshIcon />
+      <span>{label}</span>
+    </button>
+  );
+}
+
+/* ── the table ───────────────────────────────────────────────────────────── */
+
+function CaseTable({
+  rows,
+  live,
+  canStart,
+  busy,
+  pending,
+  now,
+  onStart,
+  emptyReason,
+}: {
+  rows: RecoverableCase[];
+  live: boolean;
+  canStart: boolean;
+  busy: string | null;
+  pending: Record<string, string>;
+  now: string;
+  onStart: (id: string) => void;
+  emptyReason: 'no-cases' | 'no-matches' | null;
+}) {
+  if (emptyReason === 'no-cases') {
+    return (
+      <div className="empty">
+        <div className="empty-title">No open cases</div>
+        <div className="empty-body">
+          Run <span className="mono">npm run backfill</span> to pull failures from a connected
+          Razorpay account, or wait for a live webhook.
+        </div>
+      </div>
+    );
+  }
+
+  if (emptyReason === 'no-matches') {
+    return (
+      <div className="empty">
+        <div className="empty-title">Nothing matches</div>
+        <div className="empty-body">No open case matches that search or filter.</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="table-wrap">
+      <table className="data data-cases">
+        <thead>
+          <tr>
+            <th className="num">Amount</th>
+            <th>Cause</th>
+            <th>Customer</th>
+            <th>Opened</th>
+            <th>Deadline</th>
+            <th>Status</th>
+            <th aria-label="Action" />
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((c) => (
+            <CaseRow
               key={c.id}
               c={c}
               live={live}
               canStart={canStart}
               busy={busy === c.id}
               followUpAt={pending[c.id] ?? null}
-              now={data.now}
-              onStart={() => void start(c.id)}
+              now={now}
+              onStart={() => onStart(c.id)}
             />
-          ))
-        )}
-      </section>
-
-      <section className="section">
-        <div className="card">
-          <div className="card-head">
-            <h2>Activity</h2>
-            <span className="card-sub">Live · updates every {POLL_MS / 1000}s</span>
-          </div>
-          <Activity rows={data.activity} />
-        </div>
-      </section>
-
-      <p className="subtle" style={{ marginTop: 22, fontSize: 12.5, maxWidth: 620 }}>
-        WhatsApp goes out immediately; the email follows 30 seconds later. In production those are 4
-        minutes and 26 hours apart and run on a durable workflow — here the follow-up fires from
-        this page, so it waits if you close the tab.
-      </p>
-    </>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
-/** Same masking convention as everywhere else a phone number reaches a screen. */
+function CaseRow({
+  c,
+  live,
+  canStart,
+  busy,
+  followUpAt,
+  now,
+  onStart,
+}: {
+  c: RecoverableCase;
+  live: boolean;
+  canStart: boolean;
+  busy: boolean;
+  followUpAt: string | null;
+  now: string;
+  onStart: () => void;
+}) {
+  const blocked = c.optedOut || (!c.hasPhone && !c.hasEmail);
+  const deadline = c.deadlineAt ? new Date(c.deadlineAt) : null;
+  const hoursLeft = deadline ? (deadline.getTime() - new Date(now).getTime()) / 3_600_000 : null;
+  const urgent = hoursLeft != null && hoursLeft < 6;
+
+  return (
+    <tr className={urgent ? 'row-urgent' : undefined}>
+      <td className="num amount-cell">
+        <a href={`/cases/${c.id}`}>{inr(c.amountPaise)}</a>
+      </td>
+
+      <td>
+        <div className="cell-main">{causeLabel(c.causeClass)}</div>
+        <div className="cell-sub mono">{c.errorReason}</div>
+      </td>
+
+      <td>
+        <div className="reach-pair">
+          <span className={`reach${c.hasPhone ? '' : ' reach-off'}`} title={c.phoneMasked ?? 'no phone'}>
+            <ChatIcon />
+          </span>
+          <span className={`reach${c.hasEmail ? '' : ' reach-off'}`} title={c.emailMasked ?? 'no email'}>
+            <MailIcon />
+          </span>
+          <span className="cell-sub">{c.emailMasked ?? c.phoneMasked ?? '—'}</span>
+        </div>
+      </td>
+
+      <td className="muted nowrap">{relativeTime(new Date(c.createdAt))}</td>
+
+      <td className={`nowrap${urgent ? ' urgent' : ' muted'}`}>
+        {hoursLeft == null
+          ? '—'
+          : hoursLeft > 0
+            ? `${Math.round(hoursLeft)}h left`
+            : 'past deadline'}
+      </td>
+
+      <td>
+        {followUpAt ? (
+          <FollowUp at={followUpAt} />
+        ) : c.messagesSent > 0 ? (
+          <span className="pill">
+            <span className="dot" style={{ background: 'var(--good)' }} />
+            {c.messagesSent} sent
+          </span>
+        ) : blocked ? (
+          <span className="pill">
+            <span className="dot" style={{ background: 'var(--critical)' }} />
+            {c.optedOut ? 'opted out' : 'unreachable'}
+          </span>
+        ) : (
+          <span className="pill">
+            <span className="dot" style={{ background: 'var(--ink-muted)' }} />
+            waiting
+          </span>
+        )}
+      </td>
+
+      <td className="row-action">
+        <button
+          type="button"
+          className="btn-primary btn-sm"
+          disabled={busy || blocked || !canStart}
+          onClick={onStart}
+          title={
+            c.optedOut
+              ? 'This customer has opted out'
+              : blocked
+                ? 'No reachable channel'
+                : undefined
+          }
+        >
+          {busy ? 'Starting…' : blocked ? 'Unreachable' : !canStart ? 'Off' : live ? 'Start' : 'Dry run'}
+        </button>
+      </td>
+    </tr>
+  );
+}
+
+/** Counts down to the scheduled email so the wait is visible, not mysterious. */
+function FollowUp({ at }: { at: string }) {
+  const [left, setLeft] = useState(() => Math.max(0, new Date(at).getTime() - Date.now()));
+
+  useEffect(() => {
+    const id = setInterval(() => setLeft(Math.max(0, new Date(at).getTime() - Date.now())), 1000);
+    return () => clearInterval(id);
+  }, [at]);
+
+  if (left <= 0) return <span className="pill followup done">email sending…</span>;
+  return <span className="pill followup">email in {Math.ceil(left / 1000)}s</span>;
+}
+
+/* ── confirm a resend ────────────────────────────────────────────────────── */
+
+/**
+ * The override, with its consequence stated first.
+ *
+ * A plain refusal was correct and useless: the operator often knows something
+ * the ledger does not, and telling them "no" just moves the send off-system.
+ * A confirm keeps the decision, the person and the record in one place.
+ */
+function ConfirmResend({
+  confirm,
+  live,
+  onCancel,
+  onConfirm,
+}: {
+  confirm: Confirm;
+  live: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  // Escape closes. A modal that can only be dismissed by hitting the right
+  // button is a modal people click through without reading.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onCancel();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onCancel]);
+
+  return (
+    <div className="overlay" role="dialog" aria-modal="true" aria-labelledby="resend-title">
+      <div className="overlay-backdrop" onClick={onCancel} />
+      <div className="overlay-card">
+        <h2 id="resend-title">Send this again?</h2>
+        <p>{confirm.detail}.</p>
+        <p>
+          {live ? (
+            <>
+              This will send a <strong>second real message</strong> for{' '}
+              <strong>{inr(confirm.amountPaise)}</strong> to the same person. It is recorded as its
+              own attempt, not a correction of the first.
+            </>
+          ) : (
+            <>
+              Dry run — nothing will actually be delivered. The attempt is still written to the
+              ledger so you can see exactly what would have gone out.
+            </>
+          )}
+        </p>
+
+        <div className="overlay-actions">
+          <button type="button" className="btn-ghost" onClick={onCancel}>
+            Cancel
+          </button>
+          <button type="button" className="btn-primary" onClick={onConfirm}>
+            {live ? 'Send again' : 'Run again'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── routing banner ──────────────────────────────────────────────────────── */
+
 function maskPhone(phone: string): string {
   if (phone.length <= 7) return phone;
   return `${phone.slice(0, 3)}•••••${phone.slice(-4)}`;
@@ -351,7 +826,6 @@ function Routing({ routing, live }: { routing?: Routing; live: boolean }) {
 
   const waDiverted = Boolean(routing.whatsappRedirectTo);
   const mailDiverted = Boolean(routing.emailRedirectTo);
-  // Critical only when something can actually reach a stranger right now.
   const reachesRealPeople = live && (!waDiverted || !mailDiverted);
 
   return (
@@ -397,23 +871,23 @@ function Routing({ routing, live }: { routing?: Routing; live: boolean }) {
   );
 }
 
-/* ── the switch ─────────────────────────────────────────────────────────── */
+/* ── the switch ──────────────────────────────────────────────────────────── */
 
-/**
- * Three states, because the system has three.
- *
- * A two-way toggle forced "dry run" and "off" into one position, and they are
- * not the same thing at all: off aborts at the gate and produces no record,
- * dry run exercises everything and records exactly what would have been sent.
- * The middle option is the one you actually want most of the time.
- */
 const MODES: { value: SendMode; label: string; hint: string }[] = [
   { value: 'off', label: 'Off', hint: 'Nothing runs' },
   { value: 'dry_run', label: 'Dry run', hint: 'Runs everything, sends nothing' },
   { value: 'live', label: 'Live', hint: 'Messages reach real recipients' },
 ];
 
-function ModeSwitch({ mode, onChange }: { mode: SendMode; onChange: (m: SendMode) => void }) {
+function ModeSwitch({
+  mode,
+  onChange,
+  disabled,
+}: {
+  mode: SendMode;
+  onChange: (m: SendMode) => void;
+  disabled?: boolean;
+}) {
   const active = MODES.find((m) => m.value === mode) ?? MODES[0]!;
   return (
     <div className="exec">
@@ -428,6 +902,7 @@ function ModeSwitch({ mode, onChange }: { mode: SendMode; onChange: (m: SendMode
             type="button"
             role="radio"
             aria-checked={mode === m.value}
+            disabled={disabled}
             className={`segment${mode === m.value ? ' segment-on' : ''}${m.value === 'live' && mode === 'live' ? ' segment-live' : ''}`}
             onClick={() => onChange(m.value)}
             title={m.hint}
@@ -440,120 +915,7 @@ function ModeSwitch({ mode, onChange }: { mode: SendMode; onChange: (m: SendMode
   );
 }
 
-/* ── one case ───────────────────────────────────────────────────────────── */
-
-function CaseCard({
-  c,
-  live,
-  canStart,
-  busy,
-  followUpAt,
-  now,
-  onStart,
-}: {
-  c: RecoverableCase;
-  live: boolean;
-  canStart: boolean;
-  busy: boolean;
-  followUpAt: string | null;
-  now: string;
-  onStart: () => void;
-}) {
-  const blocked = c.optedOut || (!c.hasPhone && !c.hasEmail);
-  const deadline = c.deadlineAt ? new Date(c.deadlineAt) : null;
-  const hoursLeft = deadline ? (deadline.getTime() - new Date(now).getTime()) / 3_600_000 : null;
-
-  return (
-    <article className="case-card">
-      <div className="case-main">
-        <div className="case-amount">{inr(c.amountPaise)}</div>
-        <div className="case-cause">{causeLabel(c.causeClass)}</div>
-        <div className="case-meta">
-          <span className="mono">{c.errorReason}</span>
-          <span>·</span>
-          <span>
-            {c.method}
-            {c.bank ? ` · ${c.bank}` : ''}
-          </span>
-          <span>·</span>
-          <span>opened {relativeTime(new Date(c.createdAt))}</span>
-          {hoursLeft != null && (
-            <>
-              <span>·</span>
-              <span className={hoursLeft < 6 ? 'urgent' : undefined}>
-                {hoursLeft > 0 ? `${Math.round(hoursLeft)}h left` : 'past deadline'}
-              </span>
-            </>
-          )}
-        </div>
-
-        <div className="case-reach">
-          <Reach ok={c.hasPhone} label={c.phoneMasked ?? 'no phone'} icon={<ChatIcon />} />
-          <Reach ok={c.hasEmail} label={c.emailMasked ?? 'no email'} icon={<MailIcon />} />
-          {c.messagesSent > 0 && (
-            <span className="pill">
-              {c.messagesSent} sent
-            </span>
-          )}
-        </div>
-      </div>
-
-      <div className="case-action">
-        {followUpAt && <FollowUp at={followUpAt} />}
-        <button
-          type="button"
-          className="btn-primary"
-          disabled={busy || blocked || !canStart}
-          onClick={onStart}
-          title={
-            c.optedOut
-              ? 'This customer has opted out'
-              : blocked
-                ? 'No reachable channel'
-                : undefined
-          }
-        >
-          {busy
-            ? 'Starting…'
-            : blocked
-              ? 'Unreachable'
-              : !canStart
-                ? 'Sending off'
-                : live
-                  ? 'Start recovery'
-                  : 'Dry run'}
-        </button>
-      </div>
-    </article>
-  );
-}
-
-function Reach({ ok, label, icon }: { ok: boolean; label: string; icon: React.ReactNode }) {
-  return (
-    <span className={`reach${ok ? '' : ' reach-off'}`}>
-      {icon}
-      {label}
-    </span>
-  );
-}
-
-/** Counts down to the scheduled email so the wait is visible, not mysterious. */
-function FollowUp({ at }: { at: string }) {
-  const [left, setLeft] = useState(() => Math.max(0, new Date(at).getTime() - Date.now()));
-
-  useEffect(() => {
-    const id = setInterval(
-      () => setLeft(Math.max(0, new Date(at).getTime() - Date.now())),
-      1000,
-    );
-    return () => clearInterval(id);
-  }, [at]);
-
-  if (left <= 0) return <span className="followup done">email sending…</span>;
-  return <span className="followup">email in {Math.ceil(left / 1000)}s</span>;
-}
-
-/* ── activity ───────────────────────────────────────────────────────────── */
+/* ── activity ────────────────────────────────────────────────────────────── */
 
 const STATUS_TONE: Record<string, string> = {
   sent: 'var(--data)',
@@ -564,86 +926,114 @@ const STATUS_TONE: Record<string, string> = {
   failed: 'var(--critical)',
 };
 
+/**
+ * What happened, and why.
+ *
+ * Collapsed by default now that it carries decisions as well as sends — it is
+ * the thing you open when something looks wrong, not something you watch. It
+ * reads `case_events` alongside `message_log`, which is what makes "nothing was
+ * sent, and here is the reason" expressible at all.
+ */
 function Activity({ rows }: { rows: ActivityRow[] }) {
-  if (rows.length === 0) {
-    return (
-      <p className="subtle" style={{ fontSize: 13 }}>
-        Nothing sent yet. Start a recovery above and it appears here.
-      </p>
-    );
-  }
+  const [open, setOpen] = useState(false);
 
   return (
-    <div className="table-wrap">
-      <table className="data">
-        <thead>
-          <tr>
-            <th>When</th>
-            <th>What</th>
-            <th>Detail</th>
-            <th>Outcome</th>
-            <th>Reference</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r) =>
-            r.kind === 'message' ? (
-              <tr key={r.id}>
-                <td className="muted">{relativeTime(new Date(r.at))}</td>
-                <td>
-                  <span className="pill">
-                    {r.channel === 'email' ? <MailIcon /> : <ChatIcon />}
-                    {r.channel}
-                  </span>
-                </td>
-                <td>{r.intent.replace(/_/g, ' ')}</td>
-                <td>
-                  <span className="pill">
-                    <span
-                      className="dot"
-                      style={{ background: STATUS_TONE[r.status] ?? 'var(--ink-muted)' }}
-                    />
-                    {r.suppressedReason ?? r.status}
-                  </span>
-                </td>
-                <td className="mono muted">
-                  {r.error
-                    ? r.error.slice(0, 48)
-                    : r.providerMessageId
-                      ? `${r.providerMessageId.slice(0, 22)}…`
-                      : '—'}
-                </td>
-              </tr>
-            ) : (
-              <tr key={r.id}>
-                <td className="muted">{relativeTime(new Date(r.at))}</td>
-                <td>
-                  <span className="pill">
-                    <GearIcon />
-                    {r.event.replace(/_/g, ' ')}
-                  </span>
-                </td>
-                {/*
-                  The gate's own sentence, unedited. "already 2 message(s) in 24h
-                  (cap 2)" is the whole answer to "why did nothing send", and
-                  paraphrasing it into a status word would throw away the only
-                  part that tells you what to do about it.
-                */}
-                <td>{r.reason ?? r.detail ?? '—'}</td>
-                <td className="muted">{r.actor}</td>
-                <td className="mono muted">
-                  {r.retryAt ? `retry ${whenLabel(new Date(r.retryAt))}` : '—'}
-                </td>
-              </tr>
-            ),
-          )}
-        </tbody>
-      </table>
-    </div>
+    <section className="panel" style={{ marginTop: 20 }}>
+      <button
+        type="button"
+        className="panel-head panel-toggle"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+      >
+        <span className="panel-title">
+          <ChevronIcon open={open} />
+          Activity
+        </span>
+        <span className="card-sub">
+          {rows.length === 0
+            ? 'nothing yet'
+            : `${rows.length} recent event${rows.length === 1 ? '' : 's'}`}
+        </span>
+      </button>
+
+      {open &&
+        (rows.length === 0 ? (
+          <p className="subtle" style={{ fontSize: 13, padding: '0 16px 16px' }}>
+            Nothing yet. Start a recovery above and every step appears here.
+          </p>
+        ) : (
+          <div className="table-wrap">
+            <table className="data">
+              <thead>
+                <tr>
+                  <th>When</th>
+                  <th>What</th>
+                  <th>Detail</th>
+                  <th>Outcome</th>
+                  <th>Reference</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) =>
+                  r.kind === 'message' ? (
+                    <tr key={r.id}>
+                      <td className="muted nowrap">{relativeTime(new Date(r.at))}</td>
+                      <td>
+                        <span className="pill">
+                          {r.channel === 'email' ? <MailIcon /> : <ChatIcon />}
+                          {r.channel}
+                        </span>
+                      </td>
+                      <td>{r.intent.replace(/_/g, ' ')}</td>
+                      <td>
+                        <span className="pill">
+                          <span
+                            className="dot"
+                            style={{ background: STATUS_TONE[r.status] ?? 'var(--ink-muted)' }}
+                          />
+                          {r.suppressedReason ?? r.status}
+                        </span>
+                      </td>
+                      <td className="mono muted">
+                        {r.error
+                          ? r.error.slice(0, 40)
+                          : r.providerMessageId
+                            ? `${r.providerMessageId.slice(0, 18)}…`
+                            : '—'}
+                      </td>
+                    </tr>
+                  ) : (
+                    <tr key={r.id}>
+                      <td className="muted nowrap">{relativeTime(new Date(r.at))}</td>
+                      <td>
+                        <span className="pill">
+                          <GearIcon />
+                          {r.event.replace(/_/g, ' ')}
+                        </span>
+                      </td>
+                      {/*
+                        The gate's own sentence, unedited. "already 2 message(s)
+                        in 24h (cap 2)" is the whole answer to "why did nothing
+                        send"; paraphrasing it into a status word throws away
+                        the part that tells you what to do.
+                      */}
+                      <td>{r.reason ?? r.detail ?? '—'}</td>
+                      <td className="muted">{r.actor}</td>
+                      <td className="mono muted nowrap">
+                        {r.retryAt ? `retry ${whenLabel(new Date(r.retryAt))}` : '—'}
+                      </td>
+                    </tr>
+                  ),
+                )}
+              </tbody>
+            </table>
+          </div>
+        ))}
+    </section>
   );
 }
 
-/* ── icons ──────────────────────────────────────────────────────────────── */
+/* ── icons ───────────────────────────────────────────────────────────────── */
 
 function ChatIcon() {
   return (
@@ -667,7 +1057,6 @@ function MailIcon() {
   );
 }
 
-/** Marks a decision row — something the system worked out, not something it sent. */
 function GearIcon() {
   return (
     <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
@@ -678,6 +1067,44 @@ function GearIcon() {
         strokeWidth="1.4"
         strokeLinecap="round"
       />
+    </svg>
+  );
+}
+
+function SearchIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <circle cx="7.2" cy="7.2" r="4.3" stroke="currentColor" strokeWidth="1.5" />
+      <path d="m10.6 10.6 3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function RefreshIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path
+        d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+      <path d="M13.7 2v3h-3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function ChevronIcon({ open }: { open: boolean }) {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 16 16"
+      fill="none"
+      aria-hidden="true"
+      style={{ transform: open ? 'rotate(90deg)' : 'none', transition: 'transform .15s var(--ease)' }}
+    >
+      <path d="m6 3.5 5 4.5-5 4.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -701,6 +1128,15 @@ function InfoIcon() {
     <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
       <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.4" />
       <path d="M8 7.2v4M8 4.9h.01" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function CheckIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.4" />
+      <path d="m5.4 8.2 1.9 1.9 3.4-3.9" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }

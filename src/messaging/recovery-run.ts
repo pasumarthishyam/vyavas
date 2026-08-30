@@ -55,6 +55,34 @@ export interface StartResult {
   steps: StepResult[];
   followUpAt: string | null;
   reason?: string;
+  /**
+   * True when the only thing standing in the way is that this case has already
+   * been sent. The console turns this into a confirm-and-resend prompt rather
+   * than a dead end — see `StartOptions.force`.
+   */
+  alreadySent?: boolean;
+}
+
+export interface StartOptions {
+  /**
+   * Send again on a case that has already had this rung.
+   *
+   * Off by default, and it has to be: the idempotency key is what stops a
+   * workflow replay or a double-click turning into two messages to a real
+   * person, and that guarantee is worth more than the convenience of a button
+   * that always works.
+   *
+   * But "never" was the wrong answer too. An operator watching a case has
+   * context the ledger does not — the customer rang to say nothing arrived, the
+   * template was fixed, the first attempt went out against the wrong number —
+   * and refusing them outright just means the send happens somewhere worse,
+   * by hand, off the ledger entirely.
+   *
+   * So: a deliberate override, confirmed in the UI, and recorded as its own
+   * ledger row rather than pretending to be the original. The key carries a
+   * timestamp suffix so each forced send is a distinct, auditable event.
+   */
+  force?: boolean;
 }
 
 /**
@@ -71,8 +99,15 @@ function intentFor(policyId: string | null): MessageIntent {
   return nudge?.action === 'nudge' ? nudge.intent : 'switch_method';
 }
 
-export async function startRecovery(db: Database, caseId: string): Promise<StartResult> {
+export async function startRecovery(
+  db: Database,
+  caseId: string,
+  opts: StartOptions = {},
+): Promise<StartResult> {
   const now = new Date();
+  // One suffix for the whole run, so the WhatsApp and its follow-up email stay
+  // recognisable as the same forced attempt.
+  const attempt = opts.force ? `:f${now.getTime()}` : '';
   const gathered = await gatherFacts({ db, caseId, now });
   if (!gathered) return { ok: false, caseId, steps: [], followUpAt: null, reason: 'case not found' };
 
@@ -166,6 +201,7 @@ export async function startRecovery(db: Database, caseId: string): Promise<Start
     link,
     channel: 'whatsapp',
     rung: 0,
+    keySuffix: attempt,
   });
 
   // ── Email, scheduled ──
@@ -181,8 +217,8 @@ export async function startRecovery(db: Database, caseId: string): Promise<Start
         rung: 1,
         kind: 'nudge',
         status: 'planned',
-        idempotencyKey: `${caseId}:1:nudge`,
-        params: { channel: 'email', intent, link } as never,
+        idempotencyKey: `${caseId}:1:nudge${attempt}`,
+        params: { channel: 'email', intent, link, keySuffix: attempt } as never,
         scheduledFor: followUpAt,
       })
       .onConflictDoNothing({ target: caseActions.idempotencyKey })
@@ -220,6 +256,10 @@ export async function startRecovery(db: Database, caseId: string): Promise<Start
     steps: [whatsapp],
     followUpAt: scheduled ? followUpAt.toISOString() : null,
     ...(didSomething ? {} : { reason: `${whatsapp.channel}: ${whatsapp.detail}` }),
+    // Distinguishes "cannot" from "already did". Only the second is worth
+    // offering a human an override for; the console reads this to decide
+    // whether to show a confirm prompt or a plain refusal.
+    ...(didSomething ? {} : { alreadySent: whatsapp.detail.startsWith('ALREADY_SENT') }),
   };
 }
 
@@ -251,7 +291,12 @@ export async function fireDueFollowUps(
   const results: StepResult[] = [];
 
   for (const action of due) {
-    const params = (action.params ?? {}) as { channel?: string; intent?: string; link?: string };
+    const params = (action.params ?? {}) as {
+      channel?: string;
+      intent?: string;
+      link?: string;
+      keySuffix?: string;
+    };
     const gathered = await gatherFacts({ db, caseId: action.caseId, now: new Date() });
 
     // Claim it first. A second poll arriving while this one is mid-send must
@@ -334,6 +379,9 @@ export async function fireDueFollowUps(
       link: params.link ?? gathered.paymentLinkUrl,
       channel: 'email',
       rung: 1,
+      // Carried from the action that scheduled it, so a forced resend's email
+      // does not collide with the original attempt's.
+      keySuffix: params.keySuffix ?? '',
     });
 
     await db
@@ -357,17 +405,27 @@ interface DeliverInput {
   link: string | null;
   channel: Channel;
   rung: number;
+  /**
+   * Appended to the idempotency key. Empty for every normal send.
+   *
+   * Non-empty only for a deliberate, human-confirmed resend, which is what
+   * makes that resend a distinct ledger row rather than a collision with the
+   * original.
+   */
+  keySuffix?: string;
 }
 
-/** Turn a one-word ledger refusal into something a person can act on. */
+/**
+ * Turn a one-word ledger refusal into something a person can act on.
+ *
+ * `duplicate` is prefixed with a machine-readable marker because it is the one
+ * refusal a human is allowed to override, and the caller has to be able to tell
+ * it apart from the rest without string-matching prose that will get reworded.
+ */
 function refusalDetail(reason: 'frequency_cap' | 'opted_out' | 'duplicate', channel: Channel): string {
   switch (reason) {
     case 'duplicate':
-      return (
-        `this case has already had its ${channel} message — the ledger refuses a second one ` +
-        `under the same key. Trigger a fresh failed payment to test again; re-clicking Start ` +
-        `on a case that already sent can never send twice.`
-      );
+      return `ALREADY_SENT this case has already had its ${channel} message`;
     case 'frequency_cap':
       return 'this customer has had their maximum messages for the day across all cases';
     case 'opted_out':
@@ -417,7 +475,7 @@ async function deliver(db: Database, input: DeliverInput): Promise<StepResult> {
     phone: gathered.customerPhone,
     email: gathered.customerEmail,
     frequencyCap: gathered.facts.frequencyCap,
-    idempotencyKey: `${input.caseId}:${input.rung}:${chosen}`,
+    idempotencyKey: `${input.caseId}:${input.rung}:${chosen}${input.keySuffix ?? ''}`,
     // Holdout and dry-run still suppress. The console can start a recovery;
     // it cannot override the merchant's own switch.
     suppressedReason: gathered.dryRun ? 'dry_run' : null,

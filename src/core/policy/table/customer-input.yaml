@@ -6,6 +6,28 @@
 # The only rule that matters here is SPEED. Intent decays in minutes. A ladder
 # that opens at 30 minutes has already lost most of what it could have recovered.
 # This is the one class whose floor is zero.
+#
+# ── why the second touch is email ──
+#
+# Every other class ends its ladder on a different channel from the one it
+# opened on — auth_friction, funds_limits, instrument_dead and transient_infra
+# all close on `[email, sms]`. This class did not: both of its rungs were
+# WhatsApp, and because `selectChannel` picks ONE channel per rung, that meant a
+# customer_input case could never send an email at any point in its life. The
+# gap was invisible from the outside; it just looked like email was broken.
+#
+# It also wasted the second touch. A repeat WhatsApp is the weakest possible
+# follow-up: if the first one did not land — no WhatsApp account, template
+# undelivered, notifications off — the second one fails for exactly the same
+# reason. A different channel is the only follow-up that adds information.
+#
+# `[email, whatsapp]` rather than the house `[email, sms]`: there is no SMS
+# client (see workflows/channels.ts — only whatsapp and email are built), so an
+# sms fallback silently resolves to nothing. WhatsApp is the honest fallback for
+# a customer with no email on file.
+#
+# Still two touches. The `maxCustomerTouches: 2` ceiling on this class is
+# untouched — a third message about a typo is nagging.
 
 - id: customer_input.default
   version: 1
@@ -23,7 +45,7 @@
       note: Zero delay. They are looking at the error right now.
     - at: 45m
       action: nudge
-      channels: [whatsapp]
+      channels: [email, whatsapp]
       intent: reminder
   preconditions:
     [order_unpaid, no_live_attempt, consent_ok, not_quiet_hours, within_frequency_cap, channel_deliverable]
@@ -50,7 +72,7 @@
       suggest: [retry_same, upi_intent]
     - at: 30m
       action: nudge
-      channels: [whatsapp]
+      channels: [email, whatsapp]
       intent: reminder
       suggest: [upi_intent, other_card]
       note: >
@@ -77,7 +99,7 @@
       suggest: [retry_same, upi_intent]
     - at: 45m
       action: nudge
-      channels: [whatsapp]
+      channels: [email, whatsapp]
       intent: reminder
       suggest: [upi_intent, other_card]
   preconditions:

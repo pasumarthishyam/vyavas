@@ -9,7 +9,10 @@
       "Bash(curl -s -L -o /dev/null -w \"  apex, follow    -> %{http_code}\\\\n\" -X PUT \"https://vyavas.com/api/inngest\" --max-time 45)",
       "Bash(curl -s -o /dev/null -w \"  www plain       -> %{http_code}\\\\n\" -X PUT \"https://www.vyavas.com/api/inngest\" --max-time 45)",
       "Bash(curl -s -X PUT \"https://www.vyavas.com/api/inngest?deployId=dpl_test\" --max-time 45)",
-      "Bash(curl -s -X PUT \"https://www.vyavas.com/api/inngest?deployId=dpl_9xKq2mNvBc3TfWpL4rYzHgJdSaEu\" --max-time 45)"
+      "Bash(curl -s -X PUT \"https://www.vyavas.com/api/inngest?deployId=dpl_9xKq2mNvBc3TfWpL4rYzHgJdSaEu\" --max-time 45)",
+      "Bash(perl -0pi -e \"s/    - at: 45m\\\\n      action: nudge\\\\n      channels: \\\\[whatsapp\\\\]\\\\n      intent: reminder\\\\n/    - at: 45m\\\\n      action: nudge\\\\n      channels: [email, whatsapp]\\\\n      intent: reminder\\\\n/g\" src/core/policy/table/customer-input.yaml)",
+      "Bash(perl -0pi -e \"s/\\(      channels: \\)\\\\[whatsapp\\\\]\\(\\\\n      intent: reminder\\\\n      suggest: \\\\[upi_intent, other_card\\\\]\\)/\\\\${1}[email, whatsapp]\\\\${2}/g\" src/core/policy/table/customer-input.yaml)",
+      "Bash(npx next *)"
     ]
   }
 }

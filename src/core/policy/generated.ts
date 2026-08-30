@@ -178,6 +178,7 @@ export const RAW_POLICY_ROWS: readonly unknown[] = [
         "at": "45m",
         "action": "nudge",
         "channels": [
+          "email",
           "whatsapp"
         ],
         "intent": "reminder"
@@ -229,6 +230,7 @@ export const RAW_POLICY_ROWS: readonly unknown[] = [
         "at": "30m",
         "action": "nudge",
         "channels": [
+          "email",
           "whatsapp"
         ],
         "intent": "reminder",
@@ -285,6 +287,7 @@ export const RAW_POLICY_ROWS: readonly unknown[] = [
         "at": "45m",
         "action": "nudge",
         "channels": [
+          "email",
           "whatsapp"
         ],
         "intent": "reminder",
