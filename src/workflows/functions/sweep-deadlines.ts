@@ -15,6 +15,8 @@
 import { inngest } from '../client.js';
 import { getDb } from '../../db/client.js';
 import { claimExpiredCases, transitionCase } from '../../db/repos/cases.js';
+import { redriveWebhooks } from '../../ingest/redrive.js';
+import { workflowPublisher } from '../publish.js';
 
 interface SweepSteps {
   run<T>(id: string, fn: () => Promise<T>): Promise<T>;
@@ -31,7 +33,7 @@ export const sweepDeadlines = inngest.createFunction(
   async ({ step }: { step: SweepSteps }) => {
     const db = getDb();
 
-    return step.run('close-expired', async () => {
+    const expiredResult = await step.run('close-expired', async () => {
       const expired = await claimExpiredCases(db, 50);
       const closed: string[] = [];
 
@@ -45,5 +47,23 @@ export const sweepDeadlines = inngest.createFunction(
 
       return { examined: expired.length, closed: closed.length };
     });
+
+    /*
+     * Recover deliveries that were claimed and then lost.
+     *
+     * This is the sweep that half the ingest path's comments already refer to
+     * and that did not exist. It belongs here rather than in its own function
+     * for the same reason the deadline pass does: both are backstops for work
+     * that was supposed to happen elsewhere and didn't, and both want the same
+     * every-fifteen-minutes cadence.
+     *
+     * A separate step so a failure in one half cannot roll back the other —
+     * closing expired cases must not depend on a poison webhook payload.
+     */
+    const redriveResult = await step.run('redrive-webhooks', async () =>
+      redriveWebhooks({ db, publish: workflowPublisher }),
+    );
+
+    return { expired: expiredResult, redrive: redriveResult };
   },
 );

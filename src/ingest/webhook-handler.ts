@@ -56,6 +56,20 @@ export interface WebhookDeps {
    * written correctly and then never executed.
    */
   publish?: WorkflowPublisher;
+  /**
+   * The tenant this delivery belongs to, when the caller already knows.
+   *
+   * The per-merchant endpoint does: the slug named the merchant, and its own
+   * secret is what verified the signature. Passing it here stamps it on the
+   * `webhook_events` row at claim time.
+   *
+   * That stamp is what makes redrive possible. `resolveMerchant` runs AFTER the
+   * claim, so an event whose processing dies mid-flight is left claimed,
+   * unprocessed, and — without this — unattributable: nothing on the row says
+   * whose it was, and dedupe guarantees Razorpay's own retry can never rescue
+   * it. Every such event was silently lost forever.
+   */
+  merchantId?: string | null;
 }
 
 export interface MerchantSettings {
@@ -125,6 +139,10 @@ export async function handleWebhookRequest(
     eventId,
     eventType: verified.event,
     payload: verified.envelope,
+    // Stamped at claim time, not after `resolveMerchant` — an event whose
+    // processing dies before that point still has to be attributable, or the
+    // redrive sweep cannot pick it up.
+    merchantId: deps.merchantId ?? null,
   });
 
   if (!claim.isNew) {

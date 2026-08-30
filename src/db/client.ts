@@ -371,16 +371,34 @@ export function getDb(): Database {
 }
 
 /**
- * Throw away a client that stopped answering.
+ * Stop handing out a client that stopped answering.
  *
- * The close is deliberately not awaited: the socket is very likely already
- * dead, and waiting on a graceful shutdown of a dead socket is the same hang
- * we are escaping.
+ * Eviction ONLY. The client is deliberately not closed, and that distinction
+ * matters more than it looks.
+ *
+ * The first version called `sql.end({ timeout: 0 })` here, on the reasoning
+ * that a dead socket may as well be torn down immediately. That is wrong on
+ * this platform. A warm instance serves many invocations concurrently and they
+ * all share this one module-scoped client — each having captured its `db`
+ * handle at the top of its own request. Ending the client does not just discard
+ * a dead connection, it rips the handle out from under every request currently
+ * using it, including the ones that were working fine.
+ *
+ * The damage was visible within half an hour of shipping it: webhook deliveries
+ * that had already written `payment_attempts` died before creating their case
+ * and before `markWebhookProcessed`, leaving events claimed, unprocessed, and
+ * with a null `processing_error` — because the failure handler's own write went
+ * to the same client that had just been destroyed. One slow query took out
+ * every neighbour on the instance.
+ *
+ * Dropping the reference is enough. New requests build a fresh client; in-flight
+ * ones keep the handle they already have and fail on their own deadlines if it
+ * really is dead. The orphan closes itself via `idle_timeout` and
+ * `max_lifetime`, and the instance is ephemeral anyway.
  */
 function discard(entry: { sql: postgres.Sql }): void {
   if (cached !== entry) return;
   cached = null;
-  void entry.sql.end({ timeout: 0 }).catch(() => {});
 }
 
 export async function closeDb(): Promise<void> {

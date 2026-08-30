@@ -31,9 +31,21 @@ import { workflowPublisher } from '../../../../../workflows/publish';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-// A webhook or a console mutation is short work, but it must never be allowed to
-// sit forever on a connection that stopped answering. A ceiling, not a target.
-export const maxDuration = 30;
+/**
+ * 60 — the ceiling every Vercel plan allows, Hobby included.
+ *
+ * Not a target. This route runs the whole ingest pipeline inline: upsert the
+ * customer, record the attempt, diagnose, stamp a policy, create the case, and
+ * publish to Inngest. That is a dozen sequential round trips, and on a degraded
+ * pooler each one can take seconds.
+ *
+ * It was briefly set to 30, which is under that worst case, and the result was
+ * deliveries guillotined mid-pipeline — `payment_attempts` written, the case
+ * never created, the event left claimed and unprocessed with nothing recorded
+ * to say why. A ceiling below the work's real duration does not make the work
+ * faster, it makes the failure silent and partial.
+ */
+export const maxDuration = 60;
 
 export async function POST(
   request: Request,
@@ -103,6 +115,9 @@ export async function POST(
     db,
     webhookSecret: resolved.secret,
     now: () => new Date(),
+    // Known from the URL and confirmed by the signature, so it can be stamped
+    // on the row at claim time and the redrive sweep can find its way back.
+    merchantId: resolved.merchantId,
     // Starts the ladder on a diagnosed failure and cancels it the moment the
     // money arrives. This is what makes the system autonomous rather than a
     // very well-tested set of parts that nothing ever runs.

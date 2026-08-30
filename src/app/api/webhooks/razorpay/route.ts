@@ -21,9 +21,10 @@ import { merchants } from '../../../../db/schema/tenancy';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-// A webhook or a console mutation is short work, but it must never be allowed to
-// sit forever on a connection that stopped answering. A ceiling, not a target.
-export const maxDuration = 30;
+// 60 — the ceiling every Vercel plan allows. This route runs the whole ingest
+// pipeline inline, which is a dozen sequential round trips; a ceiling under the
+// work's real duration only makes the failure silent and partial.
+export const maxDuration = 60;
 
 async function guidance() {
   const db = getDb();
