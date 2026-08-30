@@ -198,11 +198,28 @@ export async function startRecovery(db: Database, caseId: string): Promise<Start
     payload: { intent, whatsapp: whatsapp.status, followUpAt: scheduled ? followUpAt.toISOString() : null },
   });
 
+  /*
+   * "Nothing happened" must never look like success.
+   *
+   * This used to return `ok: true` whatever the step did, so a WhatsApp the
+   * ledger had refused came back as HTTP 200 with no error — the console showed
+   * no banner, no message, no change, and the only honest record was a
+   * `recovery_started` payload reading `whatsapp: "blocked"` that nothing
+   * rendered. Three clicks in a row produced three of those and looked, from
+   * the outside, like a button that did nothing at all.
+   *
+   * A dry run counts as success: it is supposed to send nothing, and it wrote
+   * the ledger row that proves what it would have said.
+   */
+  const didSomething =
+    whatsapp.status === 'sent' || whatsapp.status === 'suppressed' || scheduled;
+
   return {
-    ok: true,
+    ok: didSomething,
     caseId,
     steps: [whatsapp],
     followUpAt: scheduled ? followUpAt.toISOString() : null,
+    ...(didSomething ? {} : { reason: `${whatsapp.channel}: ${whatsapp.detail}` }),
   };
 }
 
@@ -261,6 +278,40 @@ export async function fireDueFollowUps(
     const resolved = POLICY_TABLE.find((p) => p.id === row.policyId);
     const gate = evaluatePreconditions(resolved?.preconditions ?? [], gathered.facts);
 
+    /*
+     * A DEFER is not a skip, and collapsing the two is what made the follow-up
+     * email impossible to send.
+     *
+     * Both dispositions used to land here and both were written as `skipped` —
+     * terminal, with the claim already taken, so nothing ever looked at the row
+     * again. The gate says "not yet, ask again at X"; the row said "never".
+     *
+     * It was not a rare edge either. The console schedules this email 30
+     * SECONDS after the WhatsApp, and the cool-off floor is a merchant setting
+     * measured in minutes, so the very first check was guaranteed to defer and
+     * guaranteed to be recorded as a permanent skip. The email could not send
+     * on any case, ever, and the only trace was one `skip_reason` nobody was
+     * shown.
+     *
+     * So: an abort is terminal and stays terminal. A defer releases the claim
+     * and moves `scheduled_for` to the instant the gate named, and the next
+     * poll past that instant picks it up. Releasing the claim is safe precisely
+     * because a deferred rung has sent nothing.
+     */
+    if (gate.disposition === 'defer' && gate.retryAt) {
+      await db
+        .update(caseActions)
+        .set({ executedAt: null, scheduledFor: gate.retryAt, skipReason: gate.reason })
+        .where(eq(caseActions.id, action.id));
+      results.push({
+        channel: 'email',
+        intent: (params.intent ?? 'switch_method') as MessageIntent,
+        status: 'skipped',
+        detail: `${gate.reason} — rescheduled for ${gate.retryAt.toISOString()}`,
+      });
+      continue;
+    }
+
     if (gate.disposition !== 'proceed') {
       await db
         .update(caseActions)
@@ -306,6 +357,22 @@ interface DeliverInput {
   link: string | null;
   channel: Channel;
   rung: number;
+}
+
+/** Turn a one-word ledger refusal into something a person can act on. */
+function refusalDetail(reason: 'frequency_cap' | 'opted_out' | 'duplicate', channel: Channel): string {
+  switch (reason) {
+    case 'duplicate':
+      return (
+        `this case has already had its ${channel} message — the ledger refuses a second one ` +
+        `under the same key. Trigger a fresh failed payment to test again; re-clicking Start ` +
+        `on a case that already sent can never send twice.`
+      );
+    case 'frequency_cap':
+      return 'this customer has had their maximum messages for the day across all cases';
+    case 'opted_out':
+      return 'this customer has opted out';
+  }
 }
 
 async function deliver(db: Database, input: DeliverInput): Promise<StepResult> {
@@ -379,7 +446,11 @@ async function deliver(db: Database, input: DeliverInput): Promise<StepResult> {
     case 'suppressed':
       return { channel: chosen, intent, status: 'suppressed', detail: outcome.reason };
     case 'refused':
-      return { channel: chosen, intent, status: 'blocked', detail: outcome.reason };
+      // The ledger's refusals are single words, and one of them accounts for
+      // every "I clicked Start and nothing happened": a case whose rung has
+      // already been sent is refused as a `duplicate` forever, which is correct
+      // and completely opaque. Say what it means and what to do instead.
+      return { channel: chosen, intent, status: 'blocked', detail: refusalDetail(outcome.reason, chosen) };
     case 'no_channel':
       return { channel: chosen, intent, status: 'skipped', detail: outcome.detail };
     default:
