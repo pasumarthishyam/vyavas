@@ -2247,6 +2247,14 @@ table.data-cases td {
   background: var(--ink-muted);
 }
 
+/* Hollow rather than filled: everything else on the timeline has already
+   happened, this has not — yet. Same position and size as the filled dot,
+   so it stays exactly on the connector line the fix above aligned. */
+.rung-body.tone-upcoming::before {
+  background: var(--surface);
+  border: 1.5px solid var(--data);
+}
+
 @media (max-width: 560px) {
   .drawer {
     width: 100vw;

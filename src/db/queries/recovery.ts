@@ -6,11 +6,11 @@
  * narrow deliberately.
  */
 
-import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 
 import type { Database } from '../client.js';
 import { paiseFromColumn } from '../util.js';
-import { caseEvents, recoveryCases } from '../schema/cases.js';
+import { caseActions, caseEvents, recoveryCases } from '../schema/cases.js';
 import { customers } from '../schema/customers.js';
 import { merchants } from '../schema/tenancy.js';
 import { messageLog } from '../schema/messaging.js';
@@ -43,6 +43,26 @@ export interface CaseStep {
   reason: string | null;
 }
 
+/**
+ * The next thing scheduled for a case — a planned `case_actions` row that has
+ * not fired yet, whether its time has already come (due, about to be picked up
+ * on the next poll) or is still ahead (a countdown).
+ *
+ * Read from the ledger rather than tracked client-side. It used to be: the
+ * console remembered `followUpAt` from the response to its own "start"
+ * click, in a piece of React state that meant nothing to anyone who had not
+ * personally pressed that button — reload the tab, or have a case started by
+ * the real ladder instead of the console, and the countdown simply did not
+ * exist. This is the same fact the scheduler itself reads to decide when to
+ * fire, so it is true regardless of who is watching or when they opened the
+ * page.
+ */
+export interface PlannedStep {
+  at: Date;
+  channel: string;
+  intent: string;
+}
+
 export interface RecoverableCase {
   id: string;
   amountPaise: number;
@@ -67,6 +87,7 @@ export interface RecoverableCase {
   optedOut: boolean;
 
   lastStep: CaseStep | null;
+  nextAction: PlannedStep | null;
 }
 
 export async function getRecoverableCases(
@@ -81,10 +102,11 @@ export async function getRecoverableCases(
     .orderBy(desc(recoveryCases.amountAtRiskPaise))
     .limit(50);
 
-  const steps = await getLatestStepsByCase(
-    db,
-    rows.map((r) => r.c.id),
-  );
+  const ids = rows.map((r) => r.c.id);
+  const [steps, nextActions] = await Promise.all([
+    getLatestStepsByCase(db, ids),
+    getNextPlannedByCase(db, ids),
+  ]);
 
   return rows.map(({ c, cust }) => ({
     id: c.id,
@@ -106,7 +128,48 @@ export async function getRecoverableCases(
     hasEmail: Boolean(cust?.email) && !cust?.emailUndeliverableAt,
     optedOut: cust?.optedOutAt != null,
     lastStep: steps.get(c.id) ?? null,
+    nextAction: nextActions.get(c.id) ?? null,
   }));
+}
+
+/**
+ * The earliest not-yet-executed planned action per case — `DISTINCT ON` the
+ * case id, ordered ascending, so ties resolve to whichever fires first rather
+ * than whichever the table happened to return first.
+ */
+async function getNextPlannedByCase(
+  db: Database,
+  caseIds: string[],
+): Promise<Map<string, PlannedStep>> {
+  if (caseIds.length === 0) return new Map();
+
+  const rows = await db
+    .selectDistinctOn([caseActions.caseId], {
+      caseId: caseActions.caseId,
+      scheduledFor: caseActions.scheduledFor,
+      params: caseActions.params,
+    })
+    .from(caseActions)
+    .where(
+      and(
+        inArray(caseActions.caseId, caseIds),
+        eq(caseActions.status, 'planned'),
+        isNull(caseActions.executedAt),
+      ),
+    )
+    .orderBy(caseActions.caseId, asc(caseActions.scheduledFor));
+
+  const map = new Map<string, PlannedStep>();
+  for (const r of rows) {
+    if (!r.caseId || !r.scheduledFor) continue;
+    const params = (r.params ?? {}) as { channel?: string; intent?: string };
+    map.set(r.caseId, {
+      at: r.scheduledFor,
+      channel: params.channel ?? 'email',
+      intent: params.intent ?? 'switch_method',
+    });
+  }
+  return map;
 }
 
 /**

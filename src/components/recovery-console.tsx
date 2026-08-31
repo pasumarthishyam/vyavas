@@ -11,6 +11,7 @@ import type {
   ConsoleAlert,
   ConsoleEscalation,
   ConsoleMerchant,
+  PlannedStep,
   RecoverableCase,
   RecoverySummary,
 } from '../db/queries/recovery';
@@ -91,7 +92,6 @@ export function RecoveryConsole({ initial }: { initial: Payload }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [stalled, setStalled] = useState<string | null>(null);
-  const [pending, setPending] = useState<Record<string, string>>({});
   const [confirm, setConfirm] = useState<Confirm | null>(null);
   /** The case whose drawer is open, captured at click time so the drawer keeps
    *  working even if the case later drops out of the open-cases list (e.g. it
@@ -144,20 +144,6 @@ export function RecoveryConsole({ initial }: { initial: Payload }) {
         // whatever was last loaded rather than blanking the panel.
         setData((prev) => ({ ...next, activity: next.activity ?? prev.activity }));
         setSyncedAt(Date.now());
-        // A case stays "pending" from the moment its follow-up is scheduled
-        // until its email actually appears in the log — otherwise it reads
-        // "email sending…" forever, because nothing ever told it the email left.
-        setPending((p) => {
-          const still = Object.fromEntries(
-            Object.entries(p).filter(
-              ([caseId]) =>
-                !next.activity.some(
-                  (a) => a.caseId === caseId && a.kind === 'message' && a.channel === 'email',
-                ),
-            ),
-          );
-          return Object.keys(still).length === Object.keys(p).length ? p : still;
-        });
       } else {
         misses.current += 1;
         const body = (await res.json().catch(() => ({}))) as { reason?: string };
@@ -277,7 +263,6 @@ export function RecoveryConsole({ initial }: { initial: Payload }) {
       let json: {
         ok?: boolean;
         reason?: string;
-        followUpAt?: string | null;
         alreadySent?: boolean;
       };
       try {
@@ -288,8 +273,9 @@ export function RecoveryConsole({ initial }: { initial: Payload }) {
       }
 
       if (json.ok) {
+        // The follow-up this scheduled shows up as `nextAction` on the next
+        // poll below — no client state to set here for it to appear.
         say(force ? 'Sent again.' : 'Recovery started.', 'ok');
-        if (json.followUpAt) setPending((p) => ({ ...p, [caseId]: json.followUpAt! }));
       } else if (json.alreadySent && !force) {
         // Not a dead end — an override a person is allowed to make, with the
         // consequence stated before they make it.
@@ -492,7 +478,6 @@ export function RecoveryConsole({ initial }: { initial: Payload }) {
           live={live}
           canStart={canStart}
           busy={busy}
-          pending={pending}
           now={data.now}
           onStart={(id) => void start(id)}
           onOpen={setOpenCase}
@@ -684,7 +669,6 @@ function CaseTable({
   live,
   canStart,
   busy,
-  pending,
   now,
   onStart,
   onOpen,
@@ -694,7 +678,6 @@ function CaseTable({
   live: boolean;
   canStart: boolean;
   busy: string | null;
-  pending: Record<string, string>;
   now: string;
   onStart: (id: string) => void;
   onOpen: (c: RecoverableCase) => void;
@@ -743,7 +726,6 @@ function CaseTable({
               live={live}
               canStart={canStart}
               busy={busy === c.id}
-              followUpAt={pending[c.id] ?? null}
               now={now}
               onStart={() => onStart(c.id)}
               onOpen={() => onOpen(c)}
@@ -846,12 +828,43 @@ function StepBadge({ step, at }: { step: StepLine; at: Date }) {
   );
 }
 
+/**
+ * The drawer's forward-looking entry — the same fact `NextActionBadge` shows
+ * on the row, in the trace's own `.rung` shape so it reads as the next line
+ * of the same timeline rather than a separate widget bolted above it. A
+ * hollow marker (`tone-upcoming`) rather than a filled one is the whole
+ * distinction: everything below has happened, this has not — yet.
+ */
+function UpcomingRung({ next }: { next: PlannedStep }) {
+  const [left, setLeft] = useState(() => new Date(next.at).getTime() - Date.now());
+
+  useEffect(() => {
+    const id = setInterval(() => setLeft(new Date(next.at).getTime() - Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [next.at]);
+
+  const channel = CHANNEL_LABEL[next.channel] ?? next.channel;
+  const due = left <= 0;
+  const detail = INTENT_COPY[next.intent] ?? null;
+
+  return (
+    <div className="rung">
+      <div className="rung-at">{due ? 'now' : formatCountdown(left)}</div>
+      <div className={`rung-body tone-${due ? 'progress' : 'upcoming'}`}>
+        <div className="rung-title">
+          {due ? `Sending ${channel}…` : `${channel} scheduled`}
+        </div>
+        {detail && <div className="rung-detail">{detail}</div>}
+      </div>
+    </div>
+  );
+}
+
 function CaseRow({
   c,
   live,
   canStart,
   busy,
-  followUpAt,
   now,
   onStart,
   onOpen,
@@ -860,7 +873,6 @@ function CaseRow({
   live: boolean;
   canStart: boolean;
   busy: boolean;
-  followUpAt: string | null;
   now: string;
   onStart: () => void;
   onOpen: () => void;
@@ -869,10 +881,12 @@ function CaseRow({
   const deadline = c.deadlineAt ? new Date(c.deadlineAt) : null;
   const hoursLeft = deadline ? (deadline.getTime() - new Date(now).getTime()) / 3_600_000 : null;
   const urgent = hoursLeft != null && hoursLeft < 6;
-  // A message actually mid-flight — claimed but not yet resolved sent/failed —
-  // is the one honest signal for "the system is working on this case right
-  // now," as opposed to "this is what it last did."
-  const working = c.lastStep?.kind === 'message' && c.lastStep.status === 'queued';
+  // A message actually mid-flight — claimed but not yet resolved sent/failed,
+  // or a scheduled follow-up whose time has come and is about to be picked up
+  // on the next poll — is the one honest signal for "the system is working on
+  // this case right now," as opposed to "this is what it last did."
+  const nextDue = c.nextAction != null && new Date(c.nextAction.at).getTime() <= new Date(now).getTime();
+  const working = (c.lastStep?.kind === 'message' && c.lastStep.status === 'queued') || nextDue;
 
   return (
     <tr
@@ -914,8 +928,8 @@ function CaseRow({
       </td>
 
       <td>
-        {followUpAt ? (
-          <FollowUp at={followUpAt} />
+        {c.nextAction ? (
+          <NextActionBadge next={c.nextAction} />
         ) : c.lastStep ? (
           <StepBadge step={stepLine(c.lastStep)} at={new Date(c.lastStep.at)} />
         ) : blocked ? (
@@ -956,16 +970,35 @@ function CaseRow({
 }
 
 /** Counts down to the scheduled email so the wait is visible, not mysterious. */
-function FollowUp({ at }: { at: string }) {
-  const [left, setLeft] = useState(() => Math.max(0, new Date(at).getTime() - Date.now()));
+/** `42` → "42s", `180` → "3m", `7200` → "2h", `172800` → "2d". Ceiling, never
+ *  floor — a countdown that rounds down reads "0s" for several seconds
+ *  before the thing it is counting down to actually happens. */
+function formatCountdown(ms: number): string {
+  const s = Math.max(0, Math.ceil(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.ceil(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.ceil(m / 60);
+  if (h < 48) return `${h}h`;
+  return `${Math.ceil(h / 24)}d`;
+}
+
+/** The row's compact read of `c.nextAction` — live, ticking every second. */
+function NextActionBadge({ next }: { next: PlannedStep }) {
+  const [left, setLeft] = useState(() => new Date(next.at).getTime() - Date.now());
 
   useEffect(() => {
-    const id = setInterval(() => setLeft(Math.max(0, new Date(at).getTime() - Date.now())), 1000);
+    const id = setInterval(() => setLeft(new Date(next.at).getTime() - Date.now()), 1000);
     return () => clearInterval(id);
-  }, [at]);
+  }, [next.at]);
 
-  if (left <= 0) return <span className="pill followup done">email sending…</span>;
-  return <span className="pill followup">email in {Math.ceil(left / 1000)}s</span>;
+  const channel = CHANNEL_LABEL[next.channel] ?? next.channel;
+  if (left <= 0) return <span className="pill followup done">Sending {channel}…</span>;
+  return (
+    <span className="pill followup">
+      {channel} in {formatCountdown(left)}
+    </span>
+  );
 }
 
 /* ── case drawer ─────────────────────────────────────────────────────────── */
@@ -1142,19 +1175,23 @@ function CaseDrawer({
         <div className="drawer-body">
           <h2 className="drawer-heading">What&rsquo;s happened</h2>
 
-          {trace === null && loadError ? (
-            <p className="subtle" style={{ fontSize: 13, color: 'var(--critical)' }}>
-              {loadError}
-            </p>
-          ) : trace === null ? (
-            <TraceSkeleton />
-          ) : trace.length === 0 ? (
-            <p className="subtle" style={{ fontSize: 13 }}>
-              Diagnosed, not yet touched.
-            </p>
-          ) : (
-            <div className="ladder">
-              {trace.map((row) => {
+          <div className="ladder">
+            {/* Instant, unlike the trace below — it comes straight off `c`,
+                not a fetch, so "what's next" never waits behind a spinner. */}
+            {c.nextAction && <UpcomingRung next={c.nextAction} />}
+
+            {trace === null && loadError ? (
+              <p className="subtle" style={{ fontSize: 13, color: 'var(--critical)' }}>
+                {loadError}
+              </p>
+            ) : trace === null ? (
+              <TraceSkeleton />
+            ) : trace.length === 0 && !c.nextAction ? (
+              <p className="subtle" style={{ fontSize: 13 }}>
+                Diagnosed, not yet touched.
+              </p>
+            ) : (
+              trace.map((row) => {
                 const line = stepLine(activityToStep(row));
                 return (
                   <div className="rung" key={row.id}>
@@ -1165,9 +1202,9 @@ function CaseDrawer({
                     </div>
                   </div>
                 );
-              })}
-            </div>
-          )}
+              })
+            )}
+          </div>
         </div>
 
         <div className="drawer-foot">
