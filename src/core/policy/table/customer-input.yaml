@@ -26,8 +26,12 @@
 # sms fallback silently resolves to nothing. WhatsApp is the honest fallback for
 # a customer with no email on file.
 #
-# Still two touches. The `maxCustomerTouches: 2` ceiling on this class is
-# untouched — a third message about a typo is nagging.
+# Still two touches. The class ceiling was raised to `maxCustomerTouches: 4`
+# (see cause-class.ts) so this class has room for a longer ladder, but a ceiling
+# is not a target and the ladders below deliberately still stop at two. Adding a
+# third rung is a separate, deliberate decision about whether a third message
+# about a typo helps or nags — the compiler now permits it; nothing about the
+# raised ceiling sends it.
 #
 # ── why the second touch moved from 45m to 5m ──
 #

@@ -4,7 +4,11 @@ import { getDb, isQueryTimeout } from '../../../../db/client';
 import { cookies } from 'next/headers';
 
 import {
+  getAiHealth,
   getConsoleMerchantBySlug,
+  getEscalatedCaseIds,
+  getOpenAlerts,
+  getOpenEscalations,
   getRecentActivity,
   getRecoverableCases,
   getRecoverySummary,
@@ -83,16 +87,35 @@ async function status(request: Request): Promise<NextResponse> {
    */
   const wantsActivity = new URL(request.url).searchParams.get('activity') === '1';
 
-  const [cases, activity, summary] = await Promise.all([
+  /*
+   * Escalations, alerts and AI health ride every poll.
+   *
+   * Unlike the activity feed these are NOT gated on a panel being open, and the
+   * reason is what they are for: an escalation is work waiting on a person and
+   * an alert is a merchant losing money right now. Both have to be visible
+   * without anyone having thought to expand something first — that was the
+   * whole failure of the CLI-only version.
+   *
+   * They are cheap enough to afford: three indexed reads over tables that hold
+   * open rows only, against the activity feed's two unbounded scans.
+   */
+  const [cases, activity, summary, escalations, alerts, ai, escalatedCaseIds] = await Promise.all([
     getRecoverableCases(db, merchant.id),
     wantsActivity ? getRecentActivity(db, merchant.id, 40) : Promise.resolve(null),
     getRecoverySummary(db, merchant.id),
+    getOpenEscalations(db, merchant.id),
+    getOpenAlerts(db, merchant.id),
+    getAiHealth(db, merchant.id),
+    getEscalatedCaseIds(db, merchant.id),
   ]);
-
 
   return NextResponse.json({
     ok: true,
     merchant,
+    escalations,
+    alerts,
+    ai,
+    escalatedCaseIds,
     // Where messages will ACTUALLY land — read from the merchant's own routing
     // columns, the same ones the senders read. Reading it from environment
     // variables meant the banner could report a diversion the sender was not

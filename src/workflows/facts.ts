@@ -15,6 +15,7 @@
 import { and, count, eq, gt, isNull, sql } from 'drizzle-orm';
 
 import type { Channel } from '../core/actions/types.js';
+import type { CauseClass } from '../core/taxonomy/cause-class.js';
 import type { PreconditionFacts } from '../core/guards/preconditions.js';
 import { DEFAULT_QUIET_HOURS } from '../core/guards/quiet-hours.js';
 
@@ -57,6 +58,20 @@ export interface GatheredFacts {
   rzpPaymentLinkId: string | null;
   /** Set once the ladder has created a link; composition refuses to send without one. */
   paymentLinkUrl: string | null;
+
+  /**
+   * The diagnosis tuple, carried through for the rungs that reason about the
+   * case rather than the customer.
+   *
+   * `merchant_alert` needs it to build the cluster key — an alert is about "every
+   * case failing this way on this bank and method", which is not derivable from
+   * anything else already on this object. Free to carry: the row is selected in
+   * full above either way.
+   */
+  causeClass: CauseClass | null;
+  errorReason: string | null;
+  bank: string | null;
+  method: string;
 }
 
 export async function gatherFacts(opts: GatherOptions): Promise<GatheredFacts | null> {
@@ -247,6 +262,11 @@ export async function gatherFacts(opts: GatherOptions): Promise<GatheredFacts | 
     rzpOrderId: c.rzpOrderId,
     rzpPaymentLinkId: c.rzpPaymentLinkId,
     paymentLinkUrl: c.rzpPaymentLinkUrl,
+
+    causeClass: c.causeClass,
+    errorReason: c.errorReason,
+    bank: c.bank,
+    method: c.method,
     // Dry-run plans everything and sends nothing. Distinct from the kill switch:
     // execution_enabled=false stops the ladder entirely, dry_run lets it run and
     // records what it would have done.

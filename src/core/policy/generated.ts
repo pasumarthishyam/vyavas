@@ -47,7 +47,7 @@ export const RAW_POLICY_ROWS: readonly unknown[] = [
     },
     "ladder": [
       {
-        "at": "10m",
+        "at": "3m",
         "action": "nudge",
         "channels": [
           "whatsapp",
@@ -111,7 +111,7 @@ export const RAW_POLICY_ROWS: readonly unknown[] = [
     },
     "ladder": [
       {
-        "at": "10m",
+        "at": "3m",
         "action": "nudge",
         "channels": [
           "whatsapp",

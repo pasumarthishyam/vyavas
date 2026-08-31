@@ -38,6 +38,8 @@ import { channelsForMerchant } from './merchant-clients.js';
 import { ensurePaymentLink } from './payment-link.js';
 import type { RazorpayClient } from '../adapters/razorpay/client.js';
 import type { GatheredFacts } from './facts.js';
+import { escalateCase } from '../ops/escalation.js';
+import { raiseAlertForCluster } from '../ops/merchant-alert.js';
 
 export type SuppressionReason = 'holdout' | 'dry_run';
 
@@ -316,6 +318,75 @@ export async function executeRung(input: ExecuteRungInput): Promise<RungOutcome>
       .where(eq(recoveryCases.id, caseId));
   }
 
+  // ── the two rungs that act on a person rather than a customer ──
+  //
+  // Both were dead ends until now: they built an action, wrote a row, and
+  // stopped. Neither reaches a customer, so neither participates in the
+  // frequency lock — but both are still skipped when the rung is suppressed,
+  // for the same reason a message is. A dry-run merchant has not turned
+  // execution on, and a holdout case is a case where the agent does nothing
+  // real; the recorded `suppressed` action is what the dry-run report reads.
+  let sideEffect: string | null = null;
+
+  if (!suppressedReason && action.kind === 'escalate_to_human') {
+    const escalated = await escalateCase({
+      db,
+      caseId,
+      merchantId,
+      queue: action.queue,
+      rung: rungIndex,
+      // The SAME key the action row above used. Not rebuilt — see messageKey.
+      idempotencyKey: key,
+      policyNote: rung.action === 'escalate_to_human' ? (rung.note ?? null) : null,
+      now: gathered.facts.now,
+    });
+
+    // The `escalated` audit event is written inside `escalateCase`, not here.
+    // It used to be written at this call site, which meant the ladder's
+    // escalations reached the audit trail and the console script's did not.
+    sideEffect = escalated.created
+      ? `queued for ${action.queue} (brief: ${escalated.briefSource})`
+      : 'already queued — replay';
+  }
+
+  if (!suppressedReason && action.kind === 'merchant_alert') {
+    // A single case is not a breakage. The alert fires on the CLUSTER, which is
+    // counted here rather than taken from the policy row's `minAffectedCases` —
+    // that field says how many make it worth reporting, not how many there are.
+    const alert = await raiseAlertForCluster({
+      db,
+      key: {
+        merchantId,
+        causeClass: gathered.causeClass,
+        errorReason: gathered.errorReason,
+        bank: gathered.bank,
+        method: gathered.method,
+      },
+      severity: action.severity,
+      now: gathered.facts.now,
+    });
+
+    sideEffect = alert.raised
+      ? `alerted: ${alert.signal}, ${alert.affectedCases} case(s) (${alert.proseSource})`
+      : `no cluster for ${alert.signal} — nothing raised`;
+
+    await appendEvent(db, {
+      caseId,
+      merchantId,
+      kind: 'merchant_alerted',
+      actor: 'workflow',
+      payload: {
+        rung: rungIndex,
+        signal: alert.signal,
+        raised: alert.raised,
+        affectedCases: alert.affectedCases,
+        amountAtRiskPaise: alert.amountAtRiskPaise,
+        proseSource: alert.proseSource,
+        proseError: alert.proseError,
+      },
+    });
+  }
+
   await db
     .update(recoveryCases)
     .set({ currentRung: rungIndex, updatedAt: sql`now()` })
@@ -357,7 +428,7 @@ export async function executeRung(input: ExecuteRungInput): Promise<RungOutcome>
       ? `send failed: ${sendOutcome.failure} — ${sendOutcome.detail}`
       : channel
         ? `sent via ${channel}`
-        : 'executed';
+        : (sideEffect ?? 'executed');
 
   return {
     disposition: 'executed',

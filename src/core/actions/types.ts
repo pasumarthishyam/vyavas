@@ -142,9 +142,20 @@ export interface AwaitDowntimeResolutionAction extends ActionBase {
   readonly timeoutMinutes: number;
 }
 
+/**
+ * The human queues.
+ *
+ * A const array rather than an inline union so `db/schema/enums.ts` can derive
+ * the Postgres enum from it — the same discipline as every other vocabulary
+ * here. Adding a queue in core and forgetting the migration becomes a type
+ * error rather than a runtime insert failure.
+ */
+export const ESCALATION_QUEUES = ['merchant_review', 'risk_review', 'ar_collections'] as const;
+export type EscalationQueue = (typeof ESCALATION_QUEUES)[number];
+
 export interface EscalateToHumanAction extends ActionBase {
   readonly kind: 'escalate_to_human';
-  readonly queue: 'merchant_review' | 'risk_review' | 'ar_collections';
+  readonly queue: EscalationQueue;
   readonly note: string;
 }
 

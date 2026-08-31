@@ -4,3 +4,6 @@ export * from './messages.js';
 export * from './cases.js';
 export * from './downtime.js';
 export * from './customers.js';
+export * from './alerts.js';
+export * from './escalations.js';
+export * from './proposals.js';

@@ -1,10 +1,17 @@
 import { getDb } from '../../db/client';
 import {
+  getAiHealth,
   getConsoleMerchant,
+  getEscalatedCaseIds,
+  getOpenAlerts,
+  getOpenEscalations,
   getRecentActivity,
   getRecoverableCases,
   getRecoverySummary,
   type ActivityRow,
+  type AiHealth,
+  type ConsoleAlert,
+  type ConsoleEscalation,
   type ConsoleMerchant,
   type RecoverableCase,
   type RecoverySummary,
@@ -41,6 +48,10 @@ interface Loaded {
   cases: RecoverableCase[];
   activity: ActivityRow[];
   summary: RecoverySummary;
+  escalations: ConsoleEscalation[];
+  alerts: ConsoleAlert[];
+  ai: AiHealth;
+  escalatedCaseIds: string[];
   failed: boolean;
 }
 
@@ -50,6 +61,24 @@ const EMPTY_SUMMARY: RecoverySummary = {
   failureClasses: 0,
 };
 
+const EMPTY_AI: AiHealth = {
+  configured: false,
+  briefsByClaude: 0,
+  briefsByFallback: 0,
+  lastError: null,
+  lastWrittenAt: null,
+};
+
+const EMPTY: Omit<Loaded, 'merchant' | 'failed'> = {
+  cases: [],
+  activity: [],
+  summary: EMPTY_SUMMARY,
+  escalations: [],
+  alerts: [],
+  ai: EMPTY_AI,
+  escalatedCaseIds: [],
+};
+
 async function load(): Promise<Loaded> {
   try {
     const db = getDb();
@@ -57,26 +86,32 @@ async function load(): Promise<Loaded> {
     const merchant = selection ? await getConsoleMerchant(db, selection.current.id) : null;
 
     if (!merchant) {
-      return { merchant: null, cases: [], activity: [], summary: EMPTY_SUMMARY, failed: false };
+      return { merchant: null, ...EMPTY, failed: false };
     }
 
-    const [cases, activity, summary] = await Promise.all([
-      getRecoverableCases(db, merchant.id),
-      getRecentActivity(db, merchant.id, 40),
-      getRecoverySummary(db, merchant.id),
-    ]);
+    const [cases, activity, summary, escalations, alerts, ai, escalatedCaseIds] =
+      await Promise.all([
+        getRecoverableCases(db, merchant.id),
+        getRecentActivity(db, merchant.id, 40),
+        getRecoverySummary(db, merchant.id),
+        getOpenEscalations(db, merchant.id),
+        getOpenAlerts(db, merchant.id),
+        getAiHealth(db, merchant.id),
+        getEscalatedCaseIds(db, merchant.id),
+      ]);
 
-    return { merchant, cases, activity, summary, failed: false };
+    return { merchant, cases, activity, summary, escalations, alerts, ai, escalatedCaseIds, failed: false };
   } catch {
     // Deliberately swallowed. The client poll is the recovery path, and it
     // reports its own failures — surfacing this one too would show two banners
     // for one fault.
-    return { merchant: null, cases: [], activity: [], summary: EMPTY_SUMMARY, failed: true };
+    return { merchant: null, ...EMPTY, failed: true };
   }
 }
 
 export default async function RecoveryPage() {
-  const { merchant, cases, activity, summary, failed } = await load();
+  const { merchant, cases, activity, summary, escalations, alerts, ai, escalatedCaseIds, failed } =
+    await load();
 
   // Only a genuinely empty install gets the empty state. A failed read renders
   // the console instead, so the poll can quietly repair it.
@@ -104,6 +139,10 @@ export default async function RecoveryPage() {
         cases,
         activity,
         summary,
+        escalations,
+        alerts,
+        ai,
+        escalatedCaseIds,
         now: new Date().toISOString(),
         degraded: failed,
       }}

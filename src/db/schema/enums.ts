@@ -9,7 +9,7 @@
 import { pgEnum } from 'drizzle-orm/pg-core';
 
 import { CASE_STATES, CASE_TYPES, COHORTS, ERROR_SOURCES, ERROR_STEPS, PAYMENT_METHODS } from '../../core/case/types.js';
-import { ACTION_KINDS, CHANNELS } from '../../core/actions/types.js';
+import { ACTION_KINDS, CHANNELS, ESCALATION_QUEUES } from '../../core/actions/types.js';
 import { CAUSE_CLASSES } from '../../core/taxonomy/cause-class.js';
 
 /** pgEnum wants a mutable non-empty tuple; core exports readonly consts. */
@@ -53,5 +53,21 @@ export const messageStatusEnum = pgEnum('message_status', [
 ]);
 
 export const alertSeverityEnum = pgEnum('alert_severity', ['info', 'warning', 'critical']);
+
+export const escalationQueueEnum = pgEnum('escalation_queue', tuple(ESCALATION_QUEUES));
+
+/**
+ * `dismissed` is separate from `resolved` on purpose: "a person looked and
+ * decided there was nothing to do" and "a person fixed it" are different
+ * outcomes, and collapsing them would hide a queue that is mostly noise.
+ */
+export const escalationStatusEnum = pgEnum('escalation_status', [
+  'open',
+  'acknowledged',
+  'resolved',
+  'dismissed',
+]);
+
+export const proposalStatusEnum = pgEnum('proposal_status', ['pending', 'accepted', 'rejected']);
 
 export const downtimeSeverityEnum = pgEnum('downtime_severity', ['low', 'medium', 'high']);

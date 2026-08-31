@@ -148,7 +148,7 @@ function WarnIcon() {
 
 // ─── ladder ──────────────────────────────────────────────────────────────────
 
-const INTENT_COPY: Record<string, string> = {
+export const INTENT_COPY: Record<string, string> = {
   switch_method: 'Ask them to pay a different way',
   retry_now_service_restored: 'Tell them the bank is back and the payment is ready',
   reminder: 'A neutral reminder with a working link',

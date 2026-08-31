@@ -2,9 +2,14 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { inr, causeLabel, relativeTime, whenLabel, Stat } from './ui';
+import { inr, causeLabel, relativeTime, whenLabel, Stat, INTENT_COPY } from './ui';
 import type {
+  ActivityCategory,
   ActivityRow,
+  AiHealth,
+  CaseStep,
+  ConsoleAlert,
+  ConsoleEscalation,
   ConsoleMerchant,
   RecoverableCase,
   RecoverySummary,
@@ -46,6 +51,14 @@ interface Payload {
   cases: RecoverableCase[];
   activity: ActivityRow[];
   summary: RecoverySummary;
+  /** Cases the ladder handed to a person. Not gated on a panel being open. */
+  escalations?: ConsoleEscalation[];
+  /** Merchant breakage alerts still unresolved. */
+  alerts?: ConsoleAlert[];
+  /** Whether Claude is actually writing the briefs, or the fallback is. */
+  ai?: AiHealth;
+  /** Case ids with an open escalation, for the "Needs a person" filter. */
+  escalatedCaseIds?: string[];
   now: string;
   /** True when the server render could not reach the database. */
   degraded?: boolean;
@@ -57,7 +70,7 @@ const STALE_AFTER_POLLS = 3;
 /** Rows drawn before "show more". Enough for a normal day, not enough to hang. */
 const PAGE_SIZE = 25;
 
-type Filter = 'all' | 'ready' | 'touched' | 'blocked';
+type Filter = 'all' | 'ready' | 'touched' | 'blocked' | 'escalated';
 type Sort = 'amount' | 'newest' | 'deadline';
 
 interface Notice {
@@ -80,6 +93,10 @@ export function RecoveryConsole({ initial }: { initial: Payload }) {
   const [stalled, setStalled] = useState<string | null>(null);
   const [pending, setPending] = useState<Record<string, string>>({});
   const [confirm, setConfirm] = useState<Confirm | null>(null);
+  /** The case whose drawer is open, captured at click time so the drawer keeps
+   *  working even if the case later drops out of the open-cases list (e.g. it
+   *  resolves while someone is reading its trace). */
+  const [openCase, setOpenCase] = useState<RecoverableCase | null>(null);
 
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
@@ -198,6 +215,47 @@ export function RecoveryConsole({ initial }: { initial: Payload }) {
     }
   }, [poll, loop]);
 
+  /**
+   * Act on an escalation.
+   *
+   * The console is otherwise read-only, and this is the deliberate exception:
+   * a queue nobody can clear is the same failure as the `case_actions` row
+   * nobody read, one layer up.
+   */
+  async function actOnEscalation(
+    id: string,
+    action: 'acknowledge' | 'resolve' | 'dismiss',
+    note?: string,
+  ) {
+    setBusy(id);
+    try {
+      const res = await fetch('/api/recovery/escalation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, action, note }),
+      });
+      const json = (await res.json().catch(() => ({}))) as { ok?: boolean; reason?: string };
+
+      if (json.ok) {
+        say(
+          action === 'acknowledge'
+            ? 'Picked up.'
+            : action === 'resolve'
+              ? 'Marked resolved.'
+              : 'Dismissed.',
+          'ok',
+        );
+      } else {
+        say(json.reason ?? `Could not ${action} (HTTP ${res.status})`);
+      }
+      await poll();
+    } catch (e) {
+      say(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function start(caseId: string, force = false) {
     setBusy(caseId);
     setNotice(null);
@@ -283,11 +341,14 @@ export function RecoveryConsole({ initial }: { initial: Payload }) {
   const shown = useMemo(() => {
     const q = query.trim().toLowerCase();
 
+    const escalated = new Set(data.escalatedCaseIds ?? []);
+
     const matches = data.cases.filter((c) => {
       const blocked = c.optedOut || (!c.hasPhone && !c.hasEmail);
       if (filter === 'ready' && (blocked || c.messagesSent > 0)) return false;
       if (filter === 'touched' && c.messagesSent === 0) return false;
       if (filter === 'blocked' && !blocked) return false;
+      if (filter === 'escalated' && !escalated.has(c.id)) return false;
 
       if (!q) return true;
       // Amount is searched as digits so "9588" finds ₹9,588 without the user
@@ -316,7 +377,7 @@ export function RecoveryConsole({ initial }: { initial: Payload }) {
     });
 
     return sorted;
-  }, [data.cases, query, filter, sort]);
+  }, [data.cases, data.escalatedCaseIds, query, filter, sort]);
 
   const atRisk = data.cases.reduce((s, c) => s + c.amountPaise, 0);
   const shownRisk = shown.reduce((s, c) => s + c.amountPaise, 0);
@@ -396,6 +457,14 @@ export function RecoveryConsole({ initial }: { initial: Payload }) {
         </div>
       )}
 
+      <NeedsAPerson
+        escalations={data.escalations ?? []}
+        alerts={data.alerts ?? []}
+        ai={data.ai}
+        cases={data.cases}
+        onOpenCase={setOpenCase}
+      />
+
       <section className="panel" style={{ marginTop: 20 }}>
         <Toolbar
           query={query}
@@ -426,6 +495,7 @@ export function RecoveryConsole({ initial }: { initial: Payload }) {
           pending={pending}
           now={data.now}
           onStart={(id) => void start(id)}
+          onOpen={setOpenCase}
           emptyReason={
             data.cases.length === 0
               ? 'no-cases'
@@ -466,6 +536,16 @@ export function RecoveryConsole({ initial }: { initial: Payload }) {
           }}
         />
       )}
+
+      {openCase && (
+        <CaseDrawer
+          c={data.cases.find((x) => x.id === openCase.id) ?? openCase}
+          escalation={(data.escalations ?? []).find((e) => e.caseId === openCase.id) ?? null}
+          busy={busy}
+          onAct={(id, action) => void actOnEscalation(id, action)}
+          onClose={() => setOpenCase(null)}
+        />
+      )}
     </>
   );
 }
@@ -504,6 +584,10 @@ function Toolbar({
     { value: 'ready', label: 'Needs a touch' },
     { value: 'touched', label: 'Contacted' },
     { value: 'blocked', label: 'Unreachable' },
+    // The ladder stopped and handed these to a person. Distinct from
+    // "Unreachable": that is a case we cannot contact, this is one we have
+    // deliberately decided not to act on alone.
+    { value: 'escalated', label: 'Needs a person' },
   ];
 
   return (
@@ -603,6 +687,7 @@ function CaseTable({
   pending,
   now,
   onStart,
+  onOpen,
   emptyReason,
 }: {
   rows: RecoverableCase[];
@@ -612,6 +697,7 @@ function CaseTable({
   pending: Record<string, string>;
   now: string;
   onStart: (id: string) => void;
+  onOpen: (c: RecoverableCase) => void;
   emptyReason: 'no-cases' | 'no-matches' | null;
 }) {
   if (emptyReason === 'no-cases') {
@@ -636,7 +722,7 @@ function CaseTable({
   }
 
   return (
-    <div className="table-wrap">
+    <div className="table-wrap table-scroll">
       <table className="data data-cases">
         <thead>
           <tr>
@@ -660,10 +746,102 @@ function CaseTable({
               followUpAt={pending[c.id] ?? null}
               now={now}
               onStart={() => onStart(c.id)}
+              onOpen={() => onOpen(c)}
             />
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+const CHANNEL_LABEL: Record<string, string> = {
+  whatsapp: 'WhatsApp',
+  email: 'Email',
+  sms: 'SMS',
+  in_app: 'In-app',
+};
+
+const DECISION_COPY: Record<string, { verb: string; tone: 'progress' | 'done' | 'failed' | 'muted' }> = {
+  diagnosed: { verb: 'Diagnosed', tone: 'muted' },
+  rung_fired: { verb: 'Rung fired', tone: 'progress' },
+  rung_deferred: { verb: 'Waiting', tone: 'muted' },
+  rung_aborted: { verb: 'Stopped', tone: 'failed' },
+  rung_abandoned: { verb: 'Abandoned', tone: 'failed' },
+  rung_uncomposable: { verb: 'Could not compose', tone: 'failed' },
+  ladder_complete: { verb: 'Ladder complete', tone: 'done' },
+  payment_link_created: { verb: 'Payment link created', tone: 'progress' },
+  recovery_started: { verb: 'Recovery started', tone: 'progress' },
+  state_changed: { verb: 'State changed', tone: 'muted' },
+};
+
+interface StepLine {
+  text: string;
+  detail: string | null;
+  tone: 'progress' | 'done' | 'failed' | 'muted';
+}
+
+/**
+ * The one-line "what is happening on this case" read.
+ *
+ * Pure lookup — the case's latest `message_log`/`case_events` row run through
+ * the same copy tables the ladder detail page already uses, plus a template
+ * for tense (queued reads as "Sending…", sent reads as "sent"). No model call,
+ * no summarization: the data already says exactly what happened, this only
+ * chooses which four words say it back.
+ */
+function stepLine(step: CaseStep): StepLine {
+  if (step.kind === 'message') {
+    const channel = CHANNEL_LABEL[step.channel ?? ''] ?? step.channel ?? 'Message';
+    const detail = step.intent ? (INTENT_COPY[step.intent] ?? null) : null;
+
+    if (step.suppressedReason) {
+      const reason =
+        step.suppressedReason === 'dry_run'
+          ? 'dry run'
+          : step.suppressedReason === 'holdout'
+            ? 'holdout'
+            : step.suppressedReason;
+      return { text: `${channel} skipped — ${reason}`, detail, tone: 'muted' };
+    }
+
+    switch (step.status) {
+      case 'queued':
+        return { text: `Sending ${channel}…`, detail, tone: 'progress' };
+      case 'sent':
+        return { text: `${channel} sent`, detail, tone: 'done' };
+      case 'delivered':
+        return { text: `${channel} delivered`, detail, tone: 'done' };
+      case 'read':
+        return { text: `${channel} read`, detail, tone: 'done' };
+      case 'failed':
+        return { text: `${channel} failed`, detail, tone: 'failed' };
+      default:
+        return { text: `${channel} ${step.status ?? ''}`.trim(), detail, tone: 'muted' };
+    }
+  }
+
+  const known = DECISION_COPY[step.event ?? ''];
+  const verb = known?.verb ?? (step.event ?? 'Update').replace(/_/g, ' ');
+  return { text: verb, detail: step.reason, tone: known?.tone ?? 'muted' };
+}
+
+const TONE_COLOR: Record<StepLine['tone'], string> = {
+  progress: 'var(--data)',
+  done: 'var(--good)',
+  failed: 'var(--critical)',
+  muted: 'var(--ink-muted)',
+};
+
+function StepBadge({ step, at }: { step: StepLine; at: Date }) {
+  return (
+    <div className="cell-main step-line" title={step.detail ?? undefined}>
+      <span
+        className={`dot${step.tone === 'progress' ? ' dot-pulse' : ''}`}
+        style={{ background: TONE_COLOR[step.tone] }}
+      />
+      {step.text}
+      <span className="cell-sub"> · {relativeTime(at)}</span>
     </div>
   );
 }
@@ -676,6 +854,7 @@ function CaseRow({
   followUpAt,
   now,
   onStart,
+  onOpen,
 }: {
   c: RecoverableCase;
   live: boolean;
@@ -684,16 +863,27 @@ function CaseRow({
   followUpAt: string | null;
   now: string;
   onStart: () => void;
+  onOpen: () => void;
 }) {
   const blocked = c.optedOut || (!c.hasPhone && !c.hasEmail);
   const deadline = c.deadlineAt ? new Date(c.deadlineAt) : null;
   const hoursLeft = deadline ? (deadline.getTime() - new Date(now).getTime()) / 3_600_000 : null;
   const urgent = hoursLeft != null && hoursLeft < 6;
+  // A message actually mid-flight — claimed but not yet resolved sent/failed —
+  // is the one honest signal for "the system is working on this case right
+  // now," as opposed to "this is what it last did."
+  const working = c.lastStep?.kind === 'message' && c.lastStep.status === 'queued';
 
   return (
-    <tr className={urgent ? 'row-urgent' : undefined}>
+    <tr
+      className={`row-clickable${urgent ? ' row-urgent' : ''}${working ? ' row-active' : ''}`}
+      onClick={onOpen}
+      onMouseEnter={() => prefetchTrace(c.id)}
+    >
       <td className="num amount-cell">
-        <a href={`/cases/${c.id}`}>{inr(c.amountPaise)}</a>
+        <a href={`/cases/${c.id}`} onClick={(e) => e.stopPropagation()}>
+          {inr(c.amountPaise)}
+        </a>
       </td>
 
       <td>
@@ -726,11 +916,8 @@ function CaseRow({
       <td>
         {followUpAt ? (
           <FollowUp at={followUpAt} />
-        ) : c.messagesSent > 0 ? (
-          <span className="pill">
-            <span className="dot" style={{ background: 'var(--good)' }} />
-            {c.messagesSent} sent
-          </span>
+        ) : c.lastStep ? (
+          <StepBadge step={stepLine(c.lastStep)} at={new Date(c.lastStep.at)} />
         ) : blocked ? (
           <span className="pill">
             <span className="dot" style={{ background: 'var(--critical)' }} />
@@ -749,7 +936,10 @@ function CaseRow({
           type="button"
           className="btn-primary btn-sm"
           disabled={busy || blocked || !canStart}
-          onClick={onStart}
+          onClick={(e) => {
+            e.stopPropagation();
+            onStart();
+          }}
           title={
             c.optedOut
               ? 'This customer has opted out'
@@ -776,6 +966,351 @@ function FollowUp({ at }: { at: string }) {
 
   if (left <= 0) return <span className="pill followup done">email sending…</span>;
   return <span className="pill followup">email in {Math.ceil(left / 1000)}s</span>;
+}
+
+/* ── case drawer ─────────────────────────────────────────────────────────── */
+
+/** Normalizes either half of `ActivityRow` into the shape `stepLine` reads,
+ *  so the drawer's full trace and the row's single newest line always agree —
+ *  they are the same function reading the same data at different lengths. */
+function activityToStep(row: ActivityRow): CaseStep {
+  if (row.kind === 'message') {
+    return {
+      at: row.at,
+      kind: 'message',
+      channel: row.channel,
+      intent: row.intent,
+      status: row.status,
+      suppressedReason: row.suppressedReason,
+      event: null,
+      reason: null,
+    };
+  }
+  return {
+    at: row.at,
+    kind: 'decision',
+    channel: null,
+    intent: null,
+    status: null,
+    suppressedReason: null,
+    event: row.event,
+    reason: row.reason,
+  };
+}
+
+/**
+ * Case traces, cached for the life of the page and de-duplicated in flight.
+ *
+ * Module-level, not component state: it needs to survive the drawer closing
+ * and reopening, and a hover almost always precedes the click that opens it
+ * by long enough to hide the network round trip entirely — by the time
+ * someone actually clicks, the fetch a mouseenter started has often already
+ * landed, so the drawer opens with its trace already in hand instead of a
+ * spinner.
+ */
+const traceCache = new Map<string, ActivityRow[]>();
+const traceInFlight = new Map<string, Promise<ActivityRow[] | null>>();
+
+function fetchTrace(caseId: string): Promise<ActivityRow[] | null> {
+  const inFlight = traceInFlight.get(caseId);
+  if (inFlight) return inFlight;
+
+  const request = fetch(`/api/recovery/case/${caseId}`, { cache: 'no-store' })
+    .then((res) => res.json() as Promise<{ ok: boolean; trace?: ActivityRow[] }>)
+    .then((json) => {
+      if (!json.ok || !json.trace) return null;
+      traceCache.set(caseId, json.trace);
+      return json.trace;
+    })
+    .catch(() => null)
+    .finally(() => {
+      traceInFlight.delete(caseId);
+    });
+
+  traceInFlight.set(caseId, request);
+  return request;
+}
+
+/** Fired on row hover. A no-op once the case is already cached or already loading. */
+function prefetchTrace(caseId: string): void {
+  if (traceCache.has(caseId)) return;
+  void fetchTrace(caseId);
+}
+
+/**
+ * One case, opened from its row: the full trace behind the row's single line.
+ *
+ * Reads `stepLine` over every entry in the case's history rather than just the
+ * latest, so nothing shown here can disagree with the row it was opened from —
+ * the row is a prefix of this list, not a different summary of it.
+ */
+function CaseDrawer({
+  c,
+  escalation,
+  busy,
+  onAct,
+  onClose,
+}: {
+  c: RecoverableCase | null;
+  escalation: ConsoleEscalation | null;
+  busy: string | null;
+  onAct: (id: string, action: 'acknowledge' | 'resolve' | 'dismiss') => void;
+  onClose: () => void;
+}) {
+  const caseId = c?.id ?? null;
+  const [trace, setTrace] = useState<ActivityRow[] | null>(() =>
+    caseId ? (traceCache.get(caseId) ?? null) : null,
+  );
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!caseId) return;
+    const thisCaseId = caseId;
+    let cancelled = false;
+    setTrace(traceCache.get(thisCaseId) ?? null);
+    setLoadError(null);
+
+    async function load() {
+      const result = await fetchTrace(thisCaseId);
+      if (cancelled) return;
+      if (result) setTrace(result);
+      else setLoadError('Could not load this case’s history. Retrying…');
+    }
+
+    void load();
+    // Kept live while open with its own short poll — a case someone is
+    // actually watching should update without them closing and reopening it,
+    // but nothing here needs the main poll's 4s cadence tied to it.
+    const intervalId = setInterval(() => void load(), POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
+    };
+  }, [caseId]);
+
+  useEffect(() => {
+    if (!c) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [c, onClose]);
+
+  if (!c) return null;
+
+  const blocked = c.optedOut || (!c.hasPhone && !c.hasEmail);
+
+  return (
+    <div className="drawer-backdrop" onClick={onClose}>
+      <aside
+        className="drawer"
+        role="dialog"
+        aria-modal="true"
+        aria-label={`${causeLabel(c.causeClass)}, ${inr(c.amountPaise)}`}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <button type="button" className="drawer-close" onClick={onClose} aria-label="Close">
+          <CloseIcon />
+        </button>
+
+        <div className="drawer-head">
+          <div className="eyebrow">{causeLabel(c.causeClass)}</div>
+          <div className="drawer-amount">{inr(c.amountPaise, false)}</div>
+          <p className="subtle" style={{ marginTop: 4, fontSize: 12.5 }}>
+            <span className="mono">{c.errorReason}</span> · {c.method}
+            {c.bank ? ` · ${c.bank}` : ''}
+          </p>
+
+          <div className="drawer-tags">
+            <span className="pill">
+              <span
+                className="dot"
+                style={{ background: blocked ? 'var(--critical)' : 'var(--good)' }}
+              />
+              {blocked ? (c.optedOut ? 'opted out' : 'unreachable') : 'reachable'}
+            </span>
+            {c.messagesSent > 0 && <span className="pill">{c.messagesSent} sent</span>}
+            <span className="cell-sub">{c.emailMasked ?? c.phoneMasked ?? '—'}</span>
+          </div>
+        </div>
+
+        {escalation && (
+          <DrawerBrief escalation={escalation} busy={busy === escalation.id} onAct={onAct} />
+        )}
+
+        <div className="drawer-body">
+          <h2 className="drawer-heading">What&rsquo;s happened</h2>
+
+          {trace === null && loadError ? (
+            <p className="subtle" style={{ fontSize: 13, color: 'var(--critical)' }}>
+              {loadError}
+            </p>
+          ) : trace === null ? (
+            <TraceSkeleton />
+          ) : trace.length === 0 ? (
+            <p className="subtle" style={{ fontSize: 13 }}>
+              Diagnosed, not yet touched.
+            </p>
+          ) : (
+            <div className="ladder">
+              {trace.map((row) => {
+                const line = stepLine(activityToStep(row));
+                return (
+                  <div className="rung" key={row.id}>
+                    <div className="rung-at">{relativeTime(new Date(row.at))}</div>
+                    <div className={`rung-body tone-${line.tone}`}>
+                      <div className="rung-title">{line.text}</div>
+                      {line.detail && <div className="rung-detail">{line.detail}</div>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        <div className="drawer-foot">
+          <a href={`/cases/${c.id}`} className="link-btn">
+            Open full case →
+          </a>
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+/**
+ * The written brief, surfaced at the top of the case it belongs to.
+ *
+ * This used to live only in a standalone "Needs a person" panel, disconnected
+ * from the case it was about. Reading it meant one screen; acting on the case
+ * — starting a recovery, checking what had already been tried — meant another.
+ * It belongs here instead: the brief IS about this case, so it sits above the
+ * very trace it is summarising, and the same three actions that used to live
+ * in the standalone card live here now, with nothing left behind to duplicate.
+ */
+function DrawerBrief({
+  escalation,
+  busy,
+  onAct,
+}: {
+  escalation: ConsoleEscalation;
+  busy: boolean;
+  onAct: (id: string, action: 'acknowledge' | 'resolve' | 'dismiss') => void;
+}) {
+  return (
+    <section className="drawer-brief">
+      <div className="drawer-brief-head">
+        <span className="pill">
+          <span className="dot" style={{ background: 'var(--warning)' }} />
+          Needs a person
+        </span>
+        <span className="brief-meta">
+          {QUEUE_LABEL[escalation.queue] ?? escalation.queue} ·{' '}
+          {relativeTime(new Date(escalation.createdAt))}
+          {escalation.assignedTo ? ` · ${escalation.assignedTo}` : ''}
+        </span>
+      </div>
+
+      <h3 className="drawer-brief-title">{escalation.headline}</h3>
+
+      {escalation.whatHappened && (
+        <p className="brief-body">
+          <span className="brief-label">What happened</span>
+          {escalation.whatHappened}
+        </p>
+      )}
+      {escalation.whatWeTried && (
+        <p className="brief-body">
+          <span className="brief-label">What we tried</span>
+          {escalation.whatWeTried}
+        </p>
+      )}
+      {escalation.whatIsBlocking && (
+        <p className="brief-body">
+          <span className="brief-label">Blocking</span>
+          {escalation.whatIsBlocking}
+        </p>
+      )}
+      {escalation.recommendedAction && (
+        <p className="brief-body">
+          {/* Labelled every time: this is advice to the reader, and it must
+              never read like an instruction the system is waiting to be given. */}
+          <span className="brief-label">Suggestion — advice only</span>
+          {escalation.recommendedAction}
+        </p>
+      )}
+
+      <div className="brief-foot">
+        <span
+          className="pill"
+          title={
+            escalation.briefSource === 'claude'
+              ? `Written by Claude${escalation.briefConfidence ? ` · ${escalation.briefConfidence} confidence` : ''}`
+              : (escalation.briefError ?? 'Written without the model')
+          }
+        >
+          <span
+            className="dot"
+            style={{
+              background: escalation.briefSource === 'claude' ? 'var(--good)' : 'var(--ink-muted)',
+            }}
+          />
+          {escalation.briefSource === 'claude'
+            ? `Claude${escalation.briefConfidence ? ` · ${escalation.briefConfidence}` : ''}`
+            : 'Fallback'}
+        </span>
+
+        <span style={{ flex: 1 }} />
+
+        {escalation.status === 'open' && (
+          <button
+            type="button"
+            className="btn-ghost"
+            disabled={busy}
+            onClick={() => onAct(escalation.id, 'acknowledge')}
+          >
+            Pick up
+          </button>
+        )}
+        <button
+          type="button"
+          className="btn-ghost"
+          disabled={busy}
+          onClick={() => onAct(escalation.id, 'dismiss')}
+          title="Looked, nothing to do"
+        >
+          Dismiss
+        </button>
+        <button
+          type="button"
+          className="btn-primary btn-sm"
+          disabled={busy}
+          onClick={() => onAct(escalation.id, 'resolve')}
+        >
+          {busy ? '…' : 'Resolve'}
+        </button>
+      </div>
+    </section>
+  );
+}
+
+/** A shimmering placeholder shaped like the trace it is about to become, so
+ *  the eye has something to track instead of a blank second before content
+ *  appears — reads as fast even when the network genuinely is not. */
+function TraceSkeleton() {
+  const widths = [62, 46, 74, 38];
+  return (
+    <div className="skeleton-trace" aria-hidden="true">
+      {widths.map((w, i) => (
+        <div className="skeleton-row" key={i}>
+          <span className="skeleton-dot" />
+          <span className="skeleton-bar" style={{ width: `${w}%` }} />
+        </div>
+      ))}
+    </div>
+  );
 }
 
 /* ── confirm a resend ────────────────────────────────────────────────────── */
@@ -962,14 +1497,346 @@ const STATUS_TONE: Record<string, string> = {
  * reads `case_events` alongside `message_log`, which is what makes "nothing was
  * sent, and here is the reason" expressible at all.
  */
+/* ── what needs a person ─────────────────────────────────────────────────── */
+
+const QUEUE_LABEL: Record<string, string> = {
+  merchant_review: 'Merchant review',
+  risk_review: 'Risk review',
+  ar_collections: 'Collections',
+};
+
+const SEVERITY_TONE: Record<string, string> = {
+  critical: 'var(--critical)',
+  warning: 'var(--warning)',
+  info: 'var(--ink-muted)',
+};
+
+/**
+ * The two things the agent produced that it is NOT allowed to act on alone:
+ * cases handed to a person, and breakage a merchant has to decide about.
+ *
+ * Rendered ABOVE the case table and never collapsed away when non-empty, unlike
+ * Activity. The distinction is what each panel is for — Activity is a trace you
+ * consult, this is work that is waiting. A queue behind a closed disclosure is
+ * a queue that gets ignored, which is the exact failure this replaced: before
+ * it, `escalate_to_human` wrote a row that no screen in the product read.
+ *
+ * ── a queue, not a stack of full briefs ──
+ *
+ * This used to render the whole written brief inline, per item — sensible with
+ * one escalation, unreadable with ten: the queue became a scroll of paragraphs
+ * with the thing you actually came here for (which case needs me?) buried
+ * between them. The brief now lives where it is actually about something — at
+ * the top of that case's own drawer, see `DrawerBrief` — and this panel goes
+ * back to being what a queue should be: one scannable line per item, click to
+ * open the one you want. An alert has no single case to open into, so its row
+ * stays informational rather than clickable.
+ *
+ * ── the provenance badge ──
+ *
+ * Every brief carries whether Claude wrote it or the deterministic fallback
+ * did. That is not decoration. Every AI job here fails soft by design — an
+ * unreachable model, an expired key, a rejected schema and a validation failure
+ * all end in the same fallback, and the entry still appears. Without the badge,
+ * a completely broken integration and a working one look identical from this
+ * screen, and the queue would quietly stop being worth reading.
+ */
+function NeedsAPerson({
+  escalations,
+  alerts,
+  ai,
+  cases,
+  onOpenCase,
+}: {
+  escalations: ConsoleEscalation[];
+  alerts: ConsoleAlert[];
+  ai?: AiHealth;
+  cases: RecoverableCase[];
+  onOpenCase: (c: RecoverableCase) => void;
+}) {
+  const total = escalations.length + alerts.length;
+  // Nothing to show, nothing to say — a panel that exists only to announce
+  // it has nothing in it is a line of chrome on every single load.
+  if (total === 0) return null;
+
+  return (
+    <section className="panel" style={{ marginTop: 20 }}>
+      <div className="panel-head">
+        <span className="panel-title">
+          Needs a person
+          <span className="count-badge">{total}</span>
+        </span>
+        <AiBadge ai={ai} />
+      </div>
+
+      <div className="queue-list" style={{ maxHeight: 340, overflowY: 'auto' }}>
+        {alerts.map((a) => (
+          <div className="queue-row" key={a.id}>
+            <span
+              className="dot"
+              style={{ background: SEVERITY_TONE[a.severity] ?? 'var(--ink-muted)' }}
+            />
+            <div className="queue-row-main">
+              <div className="queue-row-title">{a.title}</div>
+              <div className="queue-row-meta">
+                {a.affectedCases} case{a.affectedCases === 1 ? '' : 's'} · {inr(a.amountPaise)} ·
+                since {relativeTime(new Date(a.onsetAt))}
+              </div>
+            </div>
+          </div>
+        ))}
+
+        {escalations.map((e) => {
+          const matched = cases.find((c) => c.id === e.caseId);
+          return (
+            <button
+              type="button"
+              key={e.id}
+              className="queue-row queue-row-clickable"
+              disabled={!matched}
+              title={matched ? undefined : 'This case is no longer open'}
+              onClick={() => matched && onOpenCase(matched)}
+            >
+              <span className="dot" style={{ background: 'var(--warning)' }} />
+              <div className="queue-row-main">
+                <div className="queue-row-title">{e.headline}</div>
+                <div className="queue-row-meta">
+                  {QUEUE_LABEL[e.queue] ?? e.queue} · {inr(e.amountPaise)} ·{' '}
+                  {causeLabel(e.causeClass)} · {relativeTime(new Date(e.createdAt))}
+                </div>
+              </div>
+              <span
+                className="pill"
+                title={
+                  e.briefSource === 'claude'
+                    ? `Written by Claude${e.briefConfidence ? ` · ${e.briefConfidence} confidence` : ''}`
+                    : (e.briefError ?? 'Written without the model')
+                }
+              >
+                <span
+                  className="dot"
+                  style={{ background: e.briefSource === 'claude' ? 'var(--good)' : 'var(--ink-muted)' }}
+                />
+                {e.briefSource === 'claude' ? 'Claude' : 'Fallback'}
+              </span>
+              <ChevronIcon open={false} />
+            </button>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+/**
+ * Is the AI actually running?
+ *
+ * The honest answer without calling the API: how many briefs the model wrote
+ * versus how many fell back, and the most recent reason one fell back. A run of
+ * nothing but fallbacks is an expired key or a rejected request — both of which
+ * are invisible everywhere else, because failing soft is the whole design.
+ */
+function AiBadge({ ai }: { ai?: AiHealth }) {
+  if (!ai) return null;
+
+  if (!ai.configured) {
+    return (
+      <span className="card-sub" title="Set ANTHROPIC_API_KEY to enable written briefs">
+        AI off · briefs are deterministic
+      </span>
+    );
+  }
+
+  const total = ai.briefsByClaude + ai.briefsByFallback;
+  if (total === 0) {
+    return (
+      <span className="card-sub" title="No case has escalated yet">
+        AI on · nothing written yet
+      </span>
+    );
+  }
+
+  const broken = ai.briefsByClaude === 0;
+  return (
+    <span
+      className="card-sub"
+      style={broken ? { color: 'var(--critical)' } : undefined}
+      title={ai.lastError ?? 'Most recent brief was written by Claude'}
+    >
+      {broken
+        ? `AI configured but not writing — ${ai.lastError?.slice(0, 60) ?? 'every brief fell back'}`
+        : `AI on · ${ai.briefsByClaude} written${ai.briefsByFallback > 0 ? `, ${ai.briefsByFallback} fell back` : ''}`}
+    </span>
+  );
+}
+
+/* ── activity ────────────────────────────────────────────────────────────── */
+
+const LANES: { value: 'all' | ActivityCategory; label: string }[] = [
+  { value: 'all', label: 'Everything' },
+  { value: 'message', label: 'Messages' },
+  { value: 'ai', label: 'AI' },
+  { value: 'decision', label: 'Decisions' },
+  { value: 'system', label: 'System' },
+];
+
+const LANE_TONE: Record<ActivityCategory, string> = {
+  message: 'var(--data)',
+  ai: 'var(--good)',
+  decision: 'var(--warning)',
+  system: 'var(--ink-muted)',
+};
+
+/** What each event means, in words a person reads rather than a table name. */
+const EVENT_COPY: Record<string, string> = {
+  detected: 'Failure detected',
+  diagnosed: 'Diagnosed',
+  state_changed: 'State changed',
+  payment_received: 'Payment received',
+  aborted: 'Case aborted',
+  ladder_complete: 'Ladder finished',
+  recovery_started: 'Recovery started',
+  rung_fired: 'Rung fired',
+  rung_deferred: 'Waiting',
+  rung_aborted: 'Stopped',
+  rung_abandoned: 'Gave up on a rung',
+  rung_uncomposable: 'Could not compose a message',
+  payment_link_created: 'Payment link created',
+  escalated: 'Escalated to a person',
+  merchant_alerted: 'Merchant alerted',
+};
+
+/** `2026-08-31` → `Today` / `Yesterday` / `31 Aug`. */
+function dayLabel(d: Date, now: Date): string {
+  const day = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diff = Math.round((day(now) - day(d)) / 86_400_000);
+  if (diff === 0) return 'Today';
+  if (diff === 1) return 'Yesterday';
+  return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+}
+
+const clockTime = (d: Date) =>
+  d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false });
+
+/** One entry, normalised so the renderer does not branch on the row shape. */
+interface Entry {
+  id: string;
+  at: Date;
+  category: ActivityCategory;
+  /** The headline. Four or five words. */
+  title: string;
+  /** The sentence under it, when there is one worth reading. */
+  detail: string | null;
+  /** Right-hand status word. */
+  outcome: string | null;
+  outcomeTone: string | null;
+  caseId: string | null;
+  actor: string | null;
+}
+
+function toEntry(r: ActivityRow): Entry {
+  if (r.kind === 'message') {
+    const channel = CHANNEL_LABEL[r.channel] ?? r.channel;
+    return {
+      id: r.id,
+      at: new Date(r.at),
+      category: 'message',
+      title: `${channel} · ${INTENT_COPY[r.intent] ?? r.intent.replace(/_/g, ' ')}`,
+      // The provider's own words when a send failed — already redacted at the
+      // query layer, because Meta and Resend echo the recipient back inside
+      // failure text.
+      detail: r.error,
+      outcome: r.suppressedReason ?? r.status,
+      outcomeTone: r.suppressedReason
+        ? 'var(--ink-muted)'
+        : (STATUS_TONE[r.status] ?? 'var(--ink-muted)'),
+      caseId: r.caseId,
+      actor: null,
+    };
+  }
+
+  return {
+    id: r.id,
+    at: new Date(r.at),
+    category: r.category,
+    title: EVENT_COPY[r.event] ?? r.event.replace(/_/g, ' '),
+    /*
+     * The gate's own sentence, unedited.
+     *
+     * "already 2 message(s) in 24h (cap 2)" is the whole answer to "why did
+     * nothing send"; paraphrasing it into a status word throws away the part
+     * that tells you what to do. `detail` carries the per-kind extras — which
+     * queue an escalation went to, whether Claude wrote the brief.
+     */
+    detail: [r.reason, r.detail].filter(Boolean).join(' · ') || null,
+    outcome: r.retryAt ? `retry ${whenLabel(new Date(r.retryAt))}` : null,
+    outcomeTone: 'var(--ink-muted)',
+    caseId: r.caseId,
+    actor: r.actor,
+  };
+}
+
+/**
+ * The audit trail.
+ *
+ * ── what changed, and why ──
+ *
+ * This was a five-column table of forty undifferentiated rows, fed by an
+ * allowlist that silently dropped five of the fifteen event kinds the system
+ * actually records — including `payment_received`, the moment money arrives,
+ * and both events the Claude jobs write. An audit trail that omits the AI's own
+ * actions is not an audit trail, and a wall of rows is not legible.
+ *
+ * So: complete underneath, narrow on demand. Every recorded event reaches this
+ * component; the lane filter is how a reader asks a smaller question without
+ * losing the guarantee that nothing was excluded. Entries group by day and
+ * carry a fixed-width clock column, so scanning down finds a time rather than
+ * re-reading a relative phrase on every line.
+ *
+ * ── on privacy ──
+ *
+ * The rendered message body is never selected from the database (see
+ * `getRecentActivity`), and every free-text field is redacted at the query
+ * layer rather than here. This component cannot leak a phone number, an email
+ * or a payment link, because it is never given one.
+ */
 function Activity({
   rows,
   onOpenChange,
+  onOpenCase,
 }: {
   rows: ActivityRow[];
   onOpenChange: (open: boolean) => void;
+  onOpenCase?: (caseId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [lane, setLane] = useState<'all' | ActivityCategory>('all');
+
+  const entries = useMemo(() => rows.map(toEntry), [rows]);
+  const visible = useMemo(
+    () => (lane === 'all' ? entries : entries.filter((e) => e.category === lane)),
+    [entries, lane],
+  );
+
+  // Counts come from the FULL set, not the filtered one, so a lane that is
+  // empty still says so rather than disappearing.
+  const counts = useMemo(() => {
+    const c: Record<string, number> = { all: entries.length };
+    for (const e of entries) c[e.category] = (c[e.category] ?? 0) + 1;
+    return c;
+  }, [entries]);
+
+  const groups = useMemo(() => {
+    const now = new Date();
+    const out: { label: string; items: Entry[] }[] = [];
+    for (const e of visible) {
+      const label = dayLabel(e.at, now);
+      const last = out.at(-1);
+      if (last && last.label === label) last.items.push(e);
+      else out.push({ label, items: [e] });
+    }
+    return out;
+  }, [visible]);
 
   return (
     <section className="panel" style={{ marginTop: 20 }}>
@@ -990,86 +1857,99 @@ function Activity({
         <span className="card-sub">
           {rows.length === 0
             ? 'nothing yet'
-            : `${rows.length} recent event${rows.length === 1 ? '' : 's'}`}
+            : `${rows.length} event${rows.length === 1 ? '' : 's'} · every action recorded`}
         </span>
       </button>
 
-      {open &&
-        (rows.length === 0 ? (
-          <p className="subtle" style={{ fontSize: 13, padding: '0 16px 16px' }}>
-            Nothing yet. Start a recovery above and every step appears here.
-          </p>
-        ) : (
-          <div className="table-wrap">
-            <table className="data">
-              <thead>
-                <tr>
-                  <th>When</th>
-                  <th>What</th>
-                  <th>Detail</th>
-                  <th>Outcome</th>
-                  <th>Reference</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((r) =>
-                  r.kind === 'message' ? (
-                    <tr key={r.id}>
-                      <td className="muted nowrap">{relativeTime(new Date(r.at))}</td>
-                      <td>
-                        <span className="pill">
-                          {r.channel === 'email' ? <MailIcon /> : <ChatIcon />}
-                          {r.channel}
-                        </span>
-                      </td>
-                      <td>{r.intent.replace(/_/g, ' ')}</td>
-                      <td>
-                        <span className="pill">
-                          <span
-                            className="dot"
-                            style={{ background: STATUS_TONE[r.status] ?? 'var(--ink-muted)' }}
-                          />
-                          {r.suppressedReason ?? r.status}
-                        </span>
-                      </td>
-                      <td className="mono muted">
-                        {r.error
-                          ? r.error.slice(0, 40)
-                          : r.providerMessageId
-                            ? `${r.providerMessageId.slice(0, 18)}…`
-                            : '—'}
-                      </td>
-                    </tr>
-                  ) : (
-                    <tr key={r.id}>
-                      <td className="muted nowrap">{relativeTime(new Date(r.at))}</td>
-                      <td>
-                        <span className="pill">
-                          <GearIcon />
-                          {r.event.replace(/_/g, ' ')}
-                        </span>
-                      </td>
-                      {/*
-                        The gate's own sentence, unedited. "already 2 message(s)
-                        in 24h (cap 2)" is the whole answer to "why did nothing
-                        send"; paraphrasing it into a status word throws away
-                        the part that tells you what to do.
-                      */}
-                      <td>{r.reason ?? r.detail ?? '—'}</td>
-                      <td className="muted">{r.actor}</td>
-                      <td className="mono muted nowrap">
-                        {r.retryAt ? `retry ${whenLabel(new Date(r.retryAt))}` : '—'}
-                      </td>
-                    </tr>
-                  ),
+      {open && rows.length === 0 && (
+        <p className="subtle" style={{ fontSize: 13, padding: '0 16px 16px' }}>
+          Nothing yet. Start a recovery above and every step — every message, every decision the
+          gate made, everything Claude wrote — appears here.
+        </p>
+      )}
+
+      {open && rows.length > 0 && (
+        <>
+          <div className="trail-lanes" role="group" aria-label="Filter activity">
+            {LANES.map((l) => (
+              <button
+                key={l.value}
+                type="button"
+                aria-pressed={lane === l.value}
+                className={`segment${lane === l.value ? ' segment-on' : ''}`}
+                onClick={() => setLane(l.value)}
+              >
+                {l.value !== 'all' && (
+                  <span className="dot" style={{ background: LANE_TONE[l.value] }} />
                 )}
-              </tbody>
-            </table>
+                {l.label}
+                <span className="lane-count">{counts[l.value] ?? 0}</span>
+              </button>
+            ))}
           </div>
-        ))}
+
+          {visible.length === 0 ? (
+            <p className="subtle" style={{ fontSize: 13, padding: '0 16px 16px' }}>
+              Nothing in this lane yet.
+            </p>
+          ) : (
+            <div className="trail">
+              {groups.map((g) => (
+                <div key={g.label}>
+                  <div className="trail-day">{g.label}</div>
+                  {g.items.map((e) => (
+                    <div key={e.id} className="trail-row">
+                      <time className="trail-time" dateTime={e.at.toISOString()}>
+                        {clockTime(e.at)}
+                      </time>
+                      <span
+                        className="trail-dot"
+                        style={{ background: LANE_TONE[e.category] }}
+                        aria-hidden="true"
+                      />
+                      <div className="trail-main">
+                        <div className="trail-title">
+                          {e.title}
+                          {e.outcome && (
+                            <span className="trail-outcome">
+                              <span
+                                className="dot"
+                                style={{ background: e.outcomeTone ?? 'var(--ink-muted)' }}
+                              />
+                              {e.outcome}
+                            </span>
+                          )}
+                        </div>
+                        {e.detail && <div className="trail-detail">{e.detail}</div>}
+                      </div>
+                      <div className="trail-ref">
+                        {e.actor && <span className="trail-actor">{e.actor}</span>}
+                        {e.caseId &&
+                          (onOpenCase ? (
+                            <button
+                              type="button"
+                              className="trail-case"
+                              onClick={() => onOpenCase(e.caseId!)}
+                              title="Open this case"
+                            >
+                              {e.caseId.slice(0, 8)}
+                            </button>
+                          ) : (
+                            <span className="trail-case">{e.caseId.slice(0, 8)}</span>
+                          ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
     </section>
   );
 }
+
 
 /* ── icons ───────────────────────────────────────────────────────────────── */
 
@@ -1091,20 +1971,6 @@ function MailIcon() {
     <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
       <rect x="2" y="3.5" width="12" height="9" rx="1.6" stroke="currentColor" strokeWidth="1.4" />
       <path d="m2.6 4.6 5.4 3.9 5.4-3.9" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function GearIcon() {
-  return (
-    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <circle cx="8" cy="8" r="2.1" stroke="currentColor" strokeWidth="1.4" />
-      <path
-        d="M8 1.9v1.5M8 12.6v1.5M14.1 8h-1.5M3.4 8H1.9M12.3 3.7l-1.1 1.1M4.8 11.2l-1.1 1.1M12.3 12.3l-1.1-1.1M4.8 4.8 3.7 3.7"
-        stroke="currentColor"
-        strokeWidth="1.4"
-        strokeLinecap="round"
-      />
     </svg>
   );
 }
@@ -1175,6 +2041,14 @@ function CheckIcon() {
     <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
       <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.4" />
       <path d="m5.4 8.2 1.9 1.9 3.4-3.9" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function CloseIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M3.5 3.5l9 9M12.5 3.5l-9 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
     </svg>
   );
 }

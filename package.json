@@ -34,9 +34,14 @@
     "send:test": "tsx scripts/send-test.ts",
     "e2e": "tsx scripts/e2e.ts",
     "backfill": "tsx scripts/backfill.ts",
-    "merchant": "tsx scripts/merchant.ts"
+    "merchant": "tsx scripts/merchant.ts",
+    "queue": "tsx scripts/queue.ts",
+    "audit": "tsx scripts/self-audit.ts",
+    "triage": "tsx scripts/triage.ts",
+    "ai:smoke": "tsx scripts/ai-smoke.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.122.0",
     "drizzle-orm": "^0.45.2",
     "inngest": "^4.18.1",
     "next": "^15.5.24",

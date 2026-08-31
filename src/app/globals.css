@@ -28,6 +28,13 @@
   /* lines */
   --hairline: rgba(11, 11, 11, 0.09);
   --hairline-strong: rgba(11, 11, 11, 0.16);
+  /* Alias: some newer components reach for `--line`/`--line-strong`. Rather
+     than track down and rename every usage, the alias makes both names the
+     same token — six of them were quietly resolving to no border at all
+     before this existed, since an undefined custom property is invalid, not
+     absent. */
+  --line: var(--hairline);
+  --line-strong: var(--hairline-strong);
   --grid: #e1e0d9;
   --baseline: #c3c2b7;
 
@@ -852,6 +859,27 @@ h2 {
   padding: 0 24px;
 }
 
+/*
+ * A page grows without bound once a merchant has done more than a screenful
+ * of business — fifty open cases, a hundred logged sends — and the browser's
+ * only answer to that is to keep scrolling the whole page past the header,
+ * the mode switch, everything. Capping the table's own height and scrolling
+ * inside it keeps the page's shape constant regardless of how much history
+ * is behind it; the sticky header means the column labels never scroll away
+ * either, so a long list stays as readable as a short one.
+ */
+.table-scroll {
+  max-height: 480px;
+  overflow-y: auto;
+}
+
+.table-scroll table.data thead th {
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+  z-index: 1;
+}
+
 table.data {
   width: 100%;
   border-collapse: collapse;
@@ -998,11 +1026,14 @@ table.data tbody tr:last-child td {
   padding-bottom: 0;
 }
 
-/* the connector line between rungs */
+/* The connector line between rungs — sits at the exact boundary where column
+   2 starts (62px + the 18px gap), which is also where the dot below is
+   centered. The two were computed independently before and landed 11px
+   apart, which read as the dots floating off to the side of their own line. */
 .rung::before {
   content: '';
   position: absolute;
-  left: 68px;
+  left: 80px;
   top: 18px;
   bottom: -4px;
   width: 1px;
@@ -1029,7 +1060,7 @@ table.data tbody tr:last-child td {
 .rung-body::before {
   content: '';
   position: absolute;
-  left: -5px;
+  left: -4.5px;
   top: 6px;
   width: 9px;
   height: 9px;
@@ -2016,6 +2047,269 @@ table.data-cases td {
   box-shadow: inset 2px 0 0 var(--critical);
 }
 
+/*
+ * A message genuinely mid-flight for this case right now — a background tint
+ * rather than the urgent row's left rule, so the two can stack (a case can be
+ * both close to its deadline AND being sent to at this instant) without one
+ * overwriting the other.
+ */
+.row-active {
+  background: var(--data-soft);
+}
+
+.step-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.step-line .dot {
+  flex-shrink: 0;
+}
+
+.step-line .cell-sub {
+  margin-top: 0;
+}
+
+@keyframes dot-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
+.dot-pulse {
+  animation: dot-pulse 1.3s ease-in-out infinite;
+}
+
+.row-clickable {
+  cursor: pointer;
+}
+
+/* ── case drawer ───────────────────────────────────────────────────────────
+ * Opens from a row to show its full trace, rather than navigating away — the
+ * list stays exactly where it was underneath. Same backdrop treatment as the
+ * confirm overlay below, so the two full-screen surfaces this page can show
+ * feel like one family rather than two different libraries. */
+
+.drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(11, 11, 11, 0.34);
+  backdrop-filter: blur(2px);
+  animation: drawer-fade 0.18s var(--ease);
+}
+
+.drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(440px, 100vw);
+  background: var(--surface);
+  border-left: 1px solid var(--hairline-strong);
+  box-shadow: var(--shadow-md);
+  z-index: 51;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  animation: drawer-slide-in 0.24s var(--ease);
+}
+
+@keyframes drawer-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes drawer-slide-in {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+.drawer-close {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-sm);
+  display: grid;
+  place-items: center;
+  color: var(--ink-muted);
+  transition: background 0.14s var(--ease), color 0.14s var(--ease);
+}
+
+.drawer-close:hover {
+  background: var(--surface-hover);
+  color: var(--ink);
+}
+
+.drawer-head {
+  padding: 28px 52px 22px 28px;
+  border-bottom: 1px solid var(--hairline);
+  flex-shrink: 0;
+}
+
+.drawer-amount {
+  font-size: 30px;
+  font-weight: 620;
+  letter-spacing: -0.03em;
+  line-height: 1.15;
+  margin-top: 2px;
+  font-variant-numeric: proportional-nums;
+}
+
+.drawer-tags {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+  flex-wrap: wrap;
+}
+
+.drawer-body {
+  padding: 24px 28px;
+  flex: 1;
+}
+
+.drawer-heading {
+  font-size: 11.5px;
+  font-weight: 560;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  margin-bottom: 20px;
+}
+
+.drawer-foot {
+  padding: 16px 28px;
+  border-top: 1px solid var(--hairline);
+  flex-shrink: 0;
+}
+
+/*
+ * The written brief, at the top of the case it is about — sits between the
+ * head and the trace, distinguished by a sunken background rather than a
+ * loud banner. Reuses `.brief-body` / `.brief-label` / `.brief-foot` from the
+ * queue below, unmodified, so the same paragraph reads identically wherever
+ * it appears.
+ */
+.drawer-brief {
+  padding: 18px 28px 20px;
+  background: var(--surface-sunken);
+  border-bottom: 1px solid var(--hairline);
+  flex-shrink: 0;
+}
+
+.drawer-brief-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.drawer-brief-title {
+  font-size: 14.5px;
+  font-weight: 570;
+  letter-spacing: -0.012em;
+  line-height: 1.4;
+}
+
+.drawer-brief .brief-body:first-of-type {
+  margin-top: 12px;
+}
+
+/* Tone modifiers on the reused `.rung-body` marker — `--data` (progress) is
+   already its default, so only the other three need an override. */
+.rung-body.tone-done::before {
+  background: var(--good);
+}
+
+.rung-body.tone-failed::before {
+  background: var(--critical);
+}
+
+.rung-body.tone-muted::before {
+  background: var(--ink-muted);
+}
+
+@media (max-width: 560px) {
+  .drawer {
+    width: 100vw;
+    border-left: none;
+  }
+}
+
+.skeleton-trace {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.skeleton-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.skeleton-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: var(--surface-sunken);
+  flex-shrink: 0;
+}
+
+.skeleton-bar {
+  height: 11px;
+  border-radius: 4px;
+  background: var(--surface-sunken);
+}
+
+.skeleton-dot,
+.skeleton-bar {
+  animation: skeleton-pulse 1.1s ease-in-out infinite;
+}
+
+.skeleton-row:nth-child(2) .skeleton-dot,
+.skeleton-row:nth-child(2) .skeleton-bar {
+  animation-delay: 0.1s;
+}
+
+.skeleton-row:nth-child(3) .skeleton-dot,
+.skeleton-row:nth-child(3) .skeleton-bar {
+  animation-delay: 0.2s;
+}
+
+.skeleton-row:nth-child(4) .skeleton-dot,
+.skeleton-row:nth-child(4) .skeleton-bar {
+  animation-delay: 0.3s;
+}
+
+@keyframes skeleton-pulse {
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
 .btn-sm {
   padding: 6px 13px;
   font-size: 12.5px;
@@ -2190,4 +2484,283 @@ table.data-cases td {
   clip: rect(0 0 0 0);
   white-space: nowrap;
   border: 0;
+}
+
+/* ── needs a person ────────────────────────────────────────────────────────
+ *
+ * The escalation queue and open merchant alerts. Cards rather than table rows:
+ * unlike a case, the useful content here is a written brief of a few sentences,
+ * and a paragraph does not belong in a cell.
+ */
+
+.count-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  margin-left: 8px;
+  padding: 0 6px;
+  border-radius: 10px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--line);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-muted);
+}
+
+.brief-meta {
+  font-size: 12px;
+  color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.brief-body {
+  margin: 10px 0 0;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+/* The label sits above its sentence rather than inline: these briefs are read
+ * by someone scanning for one of four things, and a run-in label makes every
+ * paragraph start looking the same. */
+.brief-label {
+  display: block;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  margin-bottom: 2px;
+}
+
+.brief-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+
+/*
+ * One line per item: a scannable queue rather than a stack of full briefs.
+ * The full brief for an escalation lives in its case's drawer now (see
+ * `.drawer-brief`) — this row is purely "does this need my attention, and
+ * which one is it," with a click taking you to where the answer lives.
+ */
+.queue-list {
+  display: flex;
+  flex-direction: column;
+  padding: 0 8px 8px;
+}
+
+.queue-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 8px;
+  border-radius: var(--radius-sm);
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+
+.queue-row-clickable {
+  cursor: pointer;
+  transition: background 0.12s var(--ease);
+}
+
+.queue-row-clickable:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+.queue-row-clickable:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.queue-row > .dot {
+  flex-shrink: 0;
+}
+
+.queue-row-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.queue-row-title {
+  font-size: 13px;
+  font-weight: 520;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.queue-row-meta {
+  font-size: 12px;
+  color: var(--ink-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 1px;
+}
+
+.queue-row-clickable svg {
+  flex-shrink: 0;
+  color: var(--ink-muted);
+}
+
+/* ── the audit trail ───────────────────────────────────────────────────────
+ *
+ * Replaced a five-column table. A table gives every field equal weight, and in
+ * a trail they are not equal: the time and the sentence are what you scan, the
+ * actor and the case id are what you look up once you have stopped scanning.
+ *
+ * So: a fixed-width clock column so times line up down the page, a lane dot for
+ * category, the sentence taking the remaining width, and references pushed
+ * right in muted type.
+ */
+
+.trail-lanes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 16px 12px;
+}
+
+.trail-lanes .segment {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.lane-count {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-muted);
+}
+
+.trail {
+  padding: 0 16px 16px;
+  max-height: 460px;
+  overflow-y: auto;
+}
+
+/* Sticky, because scrolling a long trail without it loses which day you are in. */
+.trail-day {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface);
+  padding: 10px 0 6px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 4px;
+}
+
+.trail-row {
+  display: grid;
+  grid-template-columns: 44px 8px 1fr auto;
+  align-items: baseline;
+  gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 45%, transparent);
+}
+
+.trail-row:last-child {
+  border-bottom: 0;
+}
+
+.trail-time {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-muted);
+}
+
+.trail-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  /* Nudged down so a round dot sits on the text baseline rather than above it. */
+  transform: translateY(-1px);
+}
+
+.trail-main {
+  min-width: 0;
+}
+
+.trail-title {
+  font-size: 13px;
+  line-height: 1.45;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.trail-outcome {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--ink-muted);
+}
+
+/* The gate's own sentence. Wraps rather than truncates — "already 2 message(s)
+ * in 24h (cap 2)" is useless with its second half cut off. */
+.trail-detail {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-muted);
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+}
+
+.trail-ref {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+
+.trail-actor {
+  font-variant-numeric: tabular-nums;
+}
+
+.trail-case {
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px;
+  color: var(--ink-muted);
+  background: none;
+  border: 0;
+  padding: 0;
+}
+
+button.trail-case {
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+}
+
+button.trail-case:hover {
+  color: var(--ink);
+}
+
+@media (max-width: 640px) {
+  .trail-row {
+    grid-template-columns: 40px 8px 1fr;
+  }
+  /* The reference column drops under the sentence rather than squeezing it. */
+  .trail-ref {
+    grid-column: 3;
+    margin-top: 2px;
+  }
 }

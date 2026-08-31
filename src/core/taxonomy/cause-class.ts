@@ -131,7 +131,13 @@ export const CAUSE_CLASS_TRAITS: Readonly<Record<CauseClass, CauseClassTraits>> 
     sameInstrumentRetry: true,
     contactCustomer: true,
     alertMerchant: false,
-    maxCustomerTouches: 2,
+    // 4, the joint-highest ceiling in the taxonomy alongside funds_limits.
+    // Justified by the class itself: intent is proven, the fix takes seconds,
+    // and the instrument is fine — so the marginal touch here is worth more
+    // than in any other class. This is a CEILING, not a target; the ladders in
+    // customer-input.yaml still stop at two, and raising this does not by
+    // itself send anyone another message.
+    maxCustomerTouches: 4,
     // Zero. The customer is present and just made a mistake. Intent decays in
     // minutes, not hours.
     minFirstTouchMinutes: 0,
@@ -150,7 +156,14 @@ export const CAUSE_CLASS_TRAITS: Readonly<Record<CauseClass, CauseClassTraits>> 
     contactCustomer: true,
     alertMerchant: false,
     maxCustomerTouches: 3,
-    minFirstTouchMinutes: 10,
+    // 3 minutes, not 10. The old floor was set as if this class were an
+    // infrastructure problem to wait out. It is not: a 3DS page that timed out
+    // or an OTP that arrived late leaves the customer sitting on a failed
+    // checkout with the intent still live, exactly like customer_input. Ten
+    // minutes of silence is long enough for them to give up and close the tab.
+    // Kept above zero only so the live-attempt lock has a window to notice
+    // someone already retrying on another rail.
+    minFirstTouchMinutes: 3,
     defaultRails: ['upi_intent', 'retry_same', 'other_card'],
     framing: 'reassuring',
     downtimeGated: false,

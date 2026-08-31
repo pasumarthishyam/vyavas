@@ -36,6 +36,13 @@
       "when": 1788035816746,
       "tag": "0004_cool_off_default",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1788180031401,
+      "tag": "0005_ai_queues",
+      "breakpoints": true
     }
   ]
 }
