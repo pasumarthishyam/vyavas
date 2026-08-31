@@ -275,7 +275,35 @@ export function createClient(opts: ClientOptions = {}) {
   const sql = postgres(connectionString, {
     // Non-negotiable with Supavisor transaction mode.
     prepare: false,
-    max: opts.max ?? 1,
+
+    /**
+     * A small pool, not a single connection.
+     *
+     * This was 1, on the reasoning that each serverless invocation is its own
+     * process so a pool per invocation multiplies out to thousands of
+     * connections. That was true of the old one-request-per-instance model. It
+     * is not true here: concurrent invocations share a warm instance and this
+     * one module-scoped client, so `max: 1` did not mean "one connection per
+     * request" — it meant every concurrent request on an instance queued behind
+     * a single socket.
+     *
+     * That is what produced the "database did not respond" banner while the
+     * database itself sat idle. Measured against production data: three
+     * concurrent status polls, three timeouts. The connection was never dead,
+     * it was busy, and the client-side deadline could not tell the difference.
+     *
+     * 8 is deliberately modest — Postgres here allows 60 and sits around 10,
+     * with Supavisor multiplexing on top. The pool exists to stop
+     * self-inflicted queueing, not to raise throughput.
+     *
+     * NOTE: the pool is the SECOND fix, not the first. The reason a handful of
+     * round trips could ever exhaust it is that the functions were executing in
+     * `iad1` while the database lives in `ap-south-1` — roughly 250ms per query,
+     * each way, across the planet. `vercel.json` pins the region; see
+     * REGIONS.md. If queries ever look inexplicably slow again, check the
+     * function region before touching this number.
+     */
+    max: opts.max ?? 8,
     idle_timeout: opts.idleTimeout ?? 20,
     connect_timeout: opts.connectTimeout ?? 10,
 

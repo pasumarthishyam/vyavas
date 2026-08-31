@@ -23,7 +23,7 @@
 
 import { and, eq, isNull, lte, sql } from 'drizzle-orm';
 
-import type { Channel, MessageIntent } from '../core/actions/types.js';
+import { messageKey, type Channel, type MessageIntent } from '../core/actions/types.js';
 import { evaluatePreconditions, selectChannel } from '../core/guards/preconditions.js';
 import { resolvePolicy, matchInputFrom } from '../core/policy/resolve.js';
 import { POLICY_TABLE } from '../core/policy/index.js';
@@ -475,7 +475,20 @@ async function deliver(db: Database, input: DeliverInput): Promise<StepResult> {
     phone: gathered.customerPhone,
     email: gathered.customerEmail,
     frequencyCap: gathered.facts.frequencyCap,
-    idempotencyKey: `${input.caseId}:${input.rung}:${chosen}${input.keySuffix ?? ''}`,
+    /*
+     * The SAME key builder the ladder uses, so the two share one key space.
+     *
+     * This used to compose its own string as `caseId:rung:channel` while the
+     * ladder used `caseId:rung:kind`. Neither ever collided with the other, so
+     * the duplicate guard was inert across the only boundary that matters: the
+     * ladder would send rung 0, a human would press Start, and the same person
+     * got the same rung twice — once as `…:0:nudge`, once as `…:0:whatsapp`,
+     * both recorded as legitimate first touches.
+     *
+     * Pressing Start on a rung the ladder already sent now comes back as
+     * `duplicate`, which the console turns into a confirm-and-resend.
+     */
+    idempotencyKey: `${messageKey(input.caseId, input.rung, 'nudge')}${input.keySuffix ?? ''}`,
     // Holdout and dry-run still suppress. The console can start a recovery;
     // it cannot override the merchant's own switch.
     suppressedReason: gathered.dryRun ? 'dry_run' : null,

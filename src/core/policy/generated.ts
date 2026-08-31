@@ -175,7 +175,7 @@ export const RAW_POLICY_ROWS: readonly unknown[] = [
         "note": "Zero delay. They are looking at the error right now."
       },
       {
-        "at": "45m",
+        "at": "5m",
         "action": "nudge",
         "channels": [
           "email",
@@ -227,7 +227,7 @@ export const RAW_POLICY_ROWS: readonly unknown[] = [
         ]
       },
       {
-        "at": "30m",
+        "at": "5m",
         "action": "nudge",
         "channels": [
           "email",
@@ -284,7 +284,7 @@ export const RAW_POLICY_ROWS: readonly unknown[] = [
         ]
       },
       {
-        "at": "45m",
+        "at": "5m",
         "action": "nudge",
         "channels": [
           "email",

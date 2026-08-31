@@ -193,7 +193,24 @@ export function movesMoney(action: Action): boolean {
   return action.kind === 'retry_debit';
 }
 
-/** Stable idempotency key. Two attempts at the same rung must collapse to one. */
+/**
+ * Stable idempotency key. Two attempts at the same rung must collapse to one.
+ *
+ * The ONLY place this string is built. That matters more than it looks: the
+ * console's manual path used to compose its own key as
+ * `caseId:rung:channel` while the ladder used this one, `caseId:rung:kind`.
+ * Both formats were reasonable, neither ever collided with the other, and the
+ * duplicate guard was therefore inert across the one boundary where it had to
+ * hold — the autonomous ladder would send a rung and a human pressing Start
+ * would send it again, to the same person, both recorded as first touches.
+ *
+ * Two callers, one function. A key format that lives in two places is a key
+ * format that will disagree.
+ */
+export function messageKey(caseId: string, rung: number, kind: Action['kind']): string {
+  return `${caseId}:${rung}:${kind}`;
+}
+
 export function idempotencyKey(caseId: string, action: Action): string {
-  return `${caseId}:${action.rung}:${action.kind}`;
+  return messageKey(caseId, action.rung, action.kind);
 }

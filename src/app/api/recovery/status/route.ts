@@ -1,13 +1,15 @@
 import { NextResponse } from 'next/server';
 
 import { getDb, isQueryTimeout } from '../../../../db/client';
+import { cookies } from 'next/headers';
+
 import {
-  getConsoleMerchant,
+  getConsoleMerchantBySlug,
   getRecentActivity,
   getRecoverableCases,
   getRecoverySummary,
 } from '../../../../db/queries/recovery';
-import { currentMerchantId } from '../../../../lib/merchant-context';
+import { MERCHANT_COOKIE } from '../../../../lib/merchant-context';
 import { fireDueFollowUps } from '../../../../messaging/recovery-run';
 
 /**
@@ -29,9 +31,9 @@ export const dynamic = 'force-dynamic';
  */
 export const maxDuration = 30;
 
-export async function GET(): Promise<NextResponse> {
+export async function GET(request: Request): Promise<NextResponse> {
   try {
-    return await status();
+    return await status(request);
   } catch (error) {
     // Answer, always. A poll that throws leaves the console showing whatever it
     // last saw, with no indication the data has stopped moving — which is how a
@@ -40,9 +42,11 @@ export async function GET(): Promise<NextResponse> {
       return NextResponse.json(
         {
           ok: false,
-          reason:
-            'The database did not respond. The stale connection has been dropped; ' +
-            'the next poll will reconnect.',
+          // Deliberately does not blame a stale connection any more. It said
+          // that for weeks while the real cause was a query queued behind a
+          // cross-region round trip, and a confidently wrong error message sent
+          // everyone looking in the wrong place. State the symptom only.
+          reason: 'The database did not answer in time. Retrying.',
         },
         { status: 503 },
       );
@@ -54,11 +58,12 @@ export async function GET(): Promise<NextResponse> {
   }
 }
 
-async function status(): Promise<NextResponse> {
+async function status(request: Request): Promise<NextResponse> {
   const db = getDb();
-  // The account the console is pointed at, never "the first one".
-  const merchantId = await currentMerchantId(db);
-  const merchant = merchantId ? await getConsoleMerchant(db, merchantId) : null;
+  // The account the console is pointed at, never "the first one" — resolved in
+  // a single query rather than the two this route used to make on every poll.
+  const jar = await cookies();
+  const merchant = await getConsoleMerchantBySlug(db, jar.get(MERCHANT_COOKIE)?.value ?? null);
   if (!merchant) {
     return NextResponse.json({ ok: false, reason: 'no merchant' }, { status: 404 });
   }
@@ -67,9 +72,20 @@ async function status(): Promise<NextResponse> {
   // the same response rather than appearing one poll later.
   const fired = merchant.executionEnabled ? await fireDueFollowUps(db, merchant.id) : [];
 
+  /*
+   * Activity is fetched only when someone is looking at it.
+   *
+   * It is the most expensive read on this route — two queries, and the slowest
+   * of the set — and the panel that displays it is collapsed by default. Every
+   * poll was therefore paying for a table nobody had opened, four seconds
+   * apart, forever. On a route this hot that is most of the budget spent on
+   * none of the value.
+   */
+  const wantsActivity = new URL(request.url).searchParams.get('activity') === '1';
+
   const [cases, activity, summary] = await Promise.all([
     getRecoverableCases(db, merchant.id),
-    getRecentActivity(db, merchant.id, 25),
+    wantsActivity ? getRecentActivity(db, merchant.id, 40) : Promise.resolve(null),
     getRecoverySummary(db, merchant.id),
   ]);
 

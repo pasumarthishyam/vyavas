@@ -12,7 +12,13 @@
       "Bash(curl -s -X PUT \"https://www.vyavas.com/api/inngest?deployId=dpl_9xKq2mNvBc3TfWpL4rYzHgJdSaEu\" --max-time 45)",
       "Bash(perl -0pi -e \"s/    - at: 45m\\\\n      action: nudge\\\\n      channels: \\\\[whatsapp\\\\]\\\\n      intent: reminder\\\\n/    - at: 45m\\\\n      action: nudge\\\\n      channels: [email, whatsapp]\\\\n      intent: reminder\\\\n/g\" src/core/policy/table/customer-input.yaml)",
       "Bash(perl -0pi -e \"s/\\(      channels: \\)\\\\[whatsapp\\\\]\\(\\\\n      intent: reminder\\\\n      suggest: \\\\[upi_intent, other_card\\\\]\\)/\\\\${1}[email, whatsapp]\\\\${2}/g\" src/core/policy/table/customer-input.yaml)",
-      "Bash(npx next *)"
+      "Bash(npx next *)",
+      "Bash(perl -0pi -e 's/\\(    - at: \\)\\(45m|30m\\)\\(\\\\n      action: nudge\\\\n      channels: \\\\[email, whatsapp\\\\]\\)/${1}5m${3}/g' src/core/policy/table/customer-input.yaml)",
+      "Bash(curl -s -o /dev/null -D - https://www.vyavas.com/api/health --max-time 25)",
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(sort -k2)",
+      "Bash(awk '{print $2\"\\\\t\"$1}')",
+      "Bash(awk -F'\\\\t' '{a[$1]=a[$1]\" \"$2} END {for\\(k in a\\) print k\":\"a[k]\"\\\\n\"}')"
     ]
   }
 }

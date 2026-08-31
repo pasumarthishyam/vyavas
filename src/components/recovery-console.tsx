@@ -83,13 +83,26 @@ export function RecoveryConsole({ initial }: { initial: Payload }) {
 
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
-  const [sort, setSort] = useState<Sort>('amount');
+  /*
+   * Newest first.
+   *
+   * It defaulted to largest-amount, on the reasoning that the biggest number is
+   * the most valuable thing to act on. True in aggregate, wrong while you are
+   * working: the case you care about is almost always the one that just came
+   * in, and having it appear somewhere in the middle of the list by size made
+   * the page feel like it had not updated at all. Sorting by money is still one
+   * click away for the times you are triaging a backlog rather than watching.
+   */
+  const [sort, setSort] = useState<Sort>('newest');
   const [limit, setLimit] = useState(PAGE_SIZE);
   const [refreshing, setRefreshing] = useState(false);
   const [syncedAt, setSyncedAt] = useState<number>(() => Date.now());
 
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const misses = useRef(0);
+  /** Set by the Activity panel while it is open. A ref, so opening it does not
+   *  restart the poll loop the way a state dependency would. */
+  const wantActivity = useRef(false);
 
   const say = useCallback((message: string, tone: Notice['tone'] = 'error') => {
     setNotice({ message, at: Date.now(), tone });
@@ -97,13 +110,22 @@ export function RecoveryConsole({ initial }: { initial: Payload }) {
 
   const poll = useCallback(async (): Promise<void> => {
     try {
-      const res = await fetch('/api/recovery/status', { cache: 'no-store' });
+      // Only ask for the activity feed when the panel showing it is open. It is
+      // the most expensive read on the route and the panel is collapsed by
+      // default, so polling it every few seconds was paying for a table nobody
+      // was looking at.
+      const url = wantActivity.current
+        ? '/api/recovery/status?activity=1'
+        : '/api/recovery/status';
+      const res = await fetch(url, { cache: 'no-store' });
 
       if (res.ok) {
         misses.current = 0;
         setStalled(null);
         const next = (await res.json()) as Payload;
-        setData(next);
+        // A poll that did not ask for activity returns null for it; keep
+        // whatever was last loaded rather than blanking the panel.
+        setData((prev) => ({ ...next, activity: next.activity ?? prev.activity }));
         setSyncedAt(Date.now());
         // A case stays "pending" from the moment its follow-up is scheduled
         // until its email actually appears in the log — otherwise it reads
@@ -424,7 +446,13 @@ export function RecoveryConsole({ initial }: { initial: Payload }) {
         )}
       </section>
 
-      <Activity rows={data.activity} />
+      <Activity
+        rows={data.activity}
+        onOpenChange={(open) => {
+          wantActivity.current = open;
+          if (open) void refresh();
+        }}
+      />
 
       {confirm && (
         <ConfirmResend
@@ -508,8 +536,8 @@ function Toolbar({
       <label className="toolbar-sort">
         <span className="visually-hidden">Sort by</span>
         <select value={sort} onChange={(e) => onSort(e.target.value as Sort)}>
-          <option value="amount">Largest first</option>
           <option value="newest">Newest first</option>
+          <option value="amount">Largest first</option>
           <option value="deadline">Closing soonest</option>
         </select>
       </label>
@@ -934,7 +962,13 @@ const STATUS_TONE: Record<string, string> = {
  * reads `case_events` alongside `message_log`, which is what makes "nothing was
  * sent, and here is the reason" expressible at all.
  */
-function Activity({ rows }: { rows: ActivityRow[] }) {
+function Activity({
+  rows,
+  onOpenChange,
+}: {
+  rows: ActivityRow[];
+  onOpenChange: (open: boolean) => void;
+}) {
   const [open, setOpen] = useState(false);
 
   return (
@@ -942,7 +976,11 @@ function Activity({ rows }: { rows: ActivityRow[] }) {
       <button
         type="button"
         className="panel-head panel-toggle"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => {
+          const next = !open;
+          setOpen(next);
+          onOpenChange(next);
+        }}
         aria-expanded={open}
       >
         <span className="panel-title">

@@ -294,3 +294,45 @@ export async function getConsoleMerchant(
     emailFrom: m.emailFrom,
   };
 }
+
+/**
+ * The same thing, resolved from the console's cookie in ONE query.
+ *
+ * The status route used to call `currentMerchantId` — which selects every
+ * merchant to resolve the slug — and then `getConsoleMerchant`, which selects
+ * the very same row again. Two round trips for one answer, on a route the
+ * console polls every few seconds. That is the hottest query path in the app
+ * and it was doing twice the work it needed to.
+ *
+ * Keeps the rule that matters: an unrecognised or missing selection falls back
+ * to the FIRST merchant, never to "all merchants". A console that silently
+ * aggregated two accounts would make a Start click ambiguous about whose
+ * customers were about to be messaged.
+ */
+export async function getConsoleMerchantBySlug(
+  db: Database,
+  slug: string | null,
+): Promise<ConsoleMerchant | null> {
+  const rows = await db
+    .select()
+    .from(merchants)
+    .where(sql`deleted_at is null`)
+    .orderBy(merchants.createdAt);
+
+  const m = (slug ? rows.find((r) => r.slug === slug) : undefined) ?? rows.at(0);
+  if (!m) return null;
+
+  return {
+    id: m.id,
+    name: m.name,
+    executionEnabled: m.executionEnabled,
+    dryRun: m.dryRun,
+    frequencyCapPerDay: m.frequencyCapPerDay,
+    quietHoursStart: m.quietHoursStart,
+    quietHoursEnd: m.quietHoursEnd,
+    timezone: m.timezone,
+    whatsappRedirectTo: m.whatsappRedirectTo,
+    emailRedirectTo: m.emailRedirectTo,
+    emailFrom: m.emailFrom,
+  };
+}

@@ -28,6 +28,25 @@
 #
 # Still two touches. The `maxCustomerTouches: 2` ceiling on this class is
 # untouched — a third message about a typo is nagging.
+#
+# ── why the second touch moved from 45m to 5m ──
+#
+# At 45 minutes the email was correct as a *reminder* and useless as a *pair*.
+# The intended behaviour is belt-and-braces: the customer is looking at a failed
+# checkout right now, so tell them on WhatsApp and put the same link in their
+# inbox while they still care. Three quarters of an hour later is a different
+# message to a different, colder person — and in practice it read as "email is
+# broken", because nobody watches a case for 45 minutes to find out otherwise.
+#
+# 5m rather than seconds: WhatsApp usually lands first, and the gap gives it a
+# moment to be acted on before a second notification arrives.
+#
+# One interaction worth knowing. The merchant-level `min_gap_minutes` cool-off
+# is checked unconditionally and applies across channels, so on an account with
+# the production default of 15 this rung defers to roughly the 15-minute mark
+# rather than firing at 5. It DOES then fire — a deferred rung is now
+# rescheduled rather than dropped — so the outcome is "a bit later", not "never".
+# Set `min_gap_minutes` to 5 on an account that wants the pair tight.
 
 - id: customer_input.default
   version: 1
@@ -43,7 +62,7 @@
       channels: [whatsapp, sms]
       intent: switch_method
       note: Zero delay. They are looking at the error right now.
-    - at: 45m
+    - at: 5m
       action: nudge
       channels: [email, whatsapp]
       intent: reminder
@@ -70,7 +89,7 @@
       channels: [whatsapp, sms]
       intent: switch_method
       suggest: [retry_same, upi_intent]
-    - at: 30m
+    - at: 5m
       action: nudge
       channels: [email, whatsapp]
       intent: reminder
@@ -97,7 +116,7 @@
       channels: [whatsapp, sms]
       intent: switch_method
       suggest: [retry_same, upi_intent]
-    - at: 45m
+    - at: 5m
       action: nudge
       channels: [email, whatsapp]
       intent: reminder
