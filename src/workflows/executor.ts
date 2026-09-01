@@ -146,7 +146,12 @@ export async function executeRung(input: ExecuteRungInput): Promise<RungOutcome>
     };
   }
 
-  const { action, channel } = built;
+  const { action, channels, fanout } = built;
+  // The first channel is the rung's "primary" one, reported back to the ladder
+  // and the console. On a fanout rung the others go out beside it.
+  const channel = channels[0] ?? null;
+  // The ACTION key never carries a channel: one rung is one action, whether it
+  // produced one message or three. Only the message rows are keyed per channel.
   const key = idempotencyKey(caseId, action);
 
   // ── why this will not actually send ──
@@ -262,42 +267,70 @@ export async function executeRung(input: ExecuteRungInput): Promise<RungOutcome>
       };
     }
 
-    // One path for treatment and holdout alike. The suppressed reason decides
-    // whether the provider is called; everything before that is identical, so
-    // the two cohorts stay comparable.
-    sendOutcome = await sendMessage({
-      db,
-      merchantId,
-      customerId: gathered.customerId,
-      caseId,
-      rung: rungIndex,
-      channel,
-      message: composed.message,
-      merchantName: gathered.merchantName,
-      phone: gathered.customerPhone,
-      email: gathered.customerEmail,
-      frequencyCap: gathered.facts.frequencyCap,
-      idempotencyKey: key,
-      suppressedReason,
-      // Resolved from the merchant, not from global env: the routing that
-      // decides whether this reaches the customer or a test inbox is a property
-      // of the merchant this case belongs to.
-      channels: input.channels ?? (await channelsForMerchant(db, merchantId)),
-    });
+    // Resolved once for the whole rung rather than per channel: it is a
+    // credential lookup, and a fanout rung would otherwise pay for it twice.
+    const sendChannels = input.channels ?? (await channelsForMerchant(db, merchantId));
 
-    if (sendOutcome.status === 'refused') {
-      return {
-        disposition: 'skipped',
-        gate,
+    /*
+     * One send per channel, inside the single gate decision above.
+     *
+     * On an ordinary rung `channels` holds exactly one entry and this is the
+     * behaviour it always had. On a fanout rung it holds every channel the
+     * customer can actually receive on, and they all go out now — which is the
+     * entire point, because a second rung is a second gate evaluation and the
+     * gate is free to defer it.
+     *
+     * A failure on one channel does not stop the others. The whole reason to
+     * send a pair is that either half might not land.
+     */
+    let sent = 0;
+    const notes: string[] = [];
+
+    for (const target of channels) {
+      // Per-channel key, so WhatsApp and email are two distinct ledger rows and
+      // a replay collapses each to one. `messageKey` is still the only place a
+      // key is built.
+      const messageIdempotencyKey = fanout
+        ? idempotencyKey(caseId, action, target)
+        : key;
+
+      const outcome = await sendMessage({
+        db,
+        merchantId,
+        customerId: gathered.customerId,
+        caseId,
+        rung: rungIndex,
+        channel: target,
+        message: composed.message,
+        merchantName: gathered.merchantName,
+        phone: gathered.customerPhone,
+        email: gathered.customerEmail,
+        frequencyCap: gathered.facts.frequencyCap,
+        idempotencyKey: messageIdempotencyKey,
         suppressedReason,
-        action,
-        channel,
-        retryAt: null,
-        note: `message ledger refused: ${sendOutcome.reason}`,
-      };
+        // Resolved from the merchant, not from global env: the routing that
+        // decides whether this reaches the customer or a test inbox is a
+        // property of the merchant this case belongs to.
+        channels: sendChannels,
+      });
+
+      // The primary channel's outcome is what the ladder reports on.
+      if (target === channel) sendOutcome = outcome;
+
+      if (outcome.status === 'refused' || outcome.status === 'no_channel') {
+        notes.push(
+          `${target}: ${outcome.status === 'refused' ? outcome.reason : outcome.detail}`,
+        );
+        continue;
+      }
+
+      sent++;
+      if (outcome.status === 'failed') notes.push(`${target}: ${outcome.failure}`);
     }
 
-    if (sendOutcome.status === 'no_channel') {
+    // Nothing at all got through. Same disposition as before, with every
+    // channel's reason rather than only the first one's.
+    if (sent === 0) {
       return {
         disposition: 'skipped',
         gate,
@@ -305,16 +338,20 @@ export async function executeRung(input: ExecuteRungInput): Promise<RungOutcome>
         action,
         channel,
         retryAt: null,
-        note: sendOutcome.detail,
+        note: notes.join(' · ') || 'no channel accepted the message',
       };
     }
 
     // A failed send still counted against the cap — the ledger row stays. The
     // alternative, releasing the slot, turns one provider hiccup into two
-    // messages for one rung.
+    // messages for one rung. Incremented per message, not per rung, so a
+    // fanout pair is honestly recorded as two.
     await db
       .update(recoveryCases)
-      .set({ messagesSent: sql`${recoveryCases.messagesSent} + 1`, updatedAt: sql`now()` })
+      .set({
+        messagesSent: sql`${recoveryCases.messagesSent} + ${sent}`,
+        updatedAt: sql`now()`,
+      })
       .where(eq(recoveryCases.id, caseId));
   }
 
@@ -448,13 +485,32 @@ export async function executeRung(input: ExecuteRungInput): Promise<RungOutcome>
  * handle on the Razorpay API. Bounded autonomy as a type rather than as a
  * promise.
  */
-function buildAction(input: ExecuteRungInput): { action: Action; channel: Channel | null } | null {
+function buildAction(
+  input: ExecuteRungInput,
+): { action: Action; channels: Channel[]; fanout?: boolean } | null {
   const { rung, rungIndex, gathered, diagnosisRails, sameInstrumentRetry } = input;
 
   switch (rung.action) {
     case 'nudge': {
-      const channel = selectChannel(rung.channels, gathered.facts.eligibleChannels);
-      if (!channel) return null;
+      /*
+       * One channel, or every eligible one.
+       *
+       * `fanout` exists so a belt-and-braces pair cannot be split by the gate.
+       * Expressed as two rungs, the second is a separate gate evaluation
+       * minutes later that the live-attempt lock or the cool-off is free to
+       * defer — so the "pair" arrived minutes apart, or not at all. Here the
+       * channels are chosen inside a single decision.
+       *
+       * The rung's own order is preserved rather than the eligible list's, so
+       * the policy still decides which message goes out first.
+       */
+      const channels = rung.fanout
+        ? rung.channels.filter((c) => gathered.facts.eligibleChannels.includes(c))
+        : [selectChannel(rung.channels, gathered.facts.eligibleChannels)].filter(
+            (c): c is Channel => c !== null,
+          );
+
+      if (channels.length === 0) return null;
 
       // The live diagnosis may only ever REMOVE rails the static table offered.
       // A policy can never re-authorise something the diagnosis has ruled out —
@@ -468,12 +524,13 @@ function buildAction(input: ExecuteRungInput): { action: Action; channel: Channe
         action: {
           kind: 'nudge',
           rung: rungIndex,
-          channels: [channel],
+          channels,
           intent: rung.intent,
           suggest: rails,
           attachPaymentLink: rung.attachPaymentLink,
         },
-        channel,
+        channels,
+        fanout: rung.fanout,
       };
     }
 
@@ -489,7 +546,7 @@ function buildAction(input: ExecuteRungInput): { action: Action; channel: Channe
           debitAt: gathered.facts.now,
           channels: [channel],
         },
-        channel,
+        channels: [channel],
       };
     }
 
@@ -501,7 +558,7 @@ function buildAction(input: ExecuteRungInput): { action: Action; channel: Channe
           mandateId: 'pending',
           amount: 0 as never,
         },
-        channel: null,
+        channels: [],
       };
 
     case 'await_downtime_resolution':
@@ -513,7 +570,7 @@ function buildAction(input: ExecuteRungInput): { action: Action; channel: Channe
           method: 'unknown',
           timeoutMinutes: 240,
         },
-        channel: null,
+        channels: [],
       };
 
     case 'merchant_alert':
@@ -527,7 +584,7 @@ function buildAction(input: ExecuteRungInput): { action: Action; channel: Channe
           amountAtRisk: 0 as never,
           onsetAt: gathered.facts.now,
         },
-        channel: null,
+        channels: [],
       };
 
     case 'escalate_to_human':
@@ -538,7 +595,7 @@ function buildAction(input: ExecuteRungInput): { action: Action; channel: Channe
           queue: rung.queue,
           note: rung.note ?? 'escalated by ladder',
         },
-        channel: null,
+        channels: [],
       };
 
     default:

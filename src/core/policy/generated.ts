@@ -169,19 +169,11 @@ export const RAW_POLICY_ROWS: readonly unknown[] = [
         "action": "nudge",
         "channels": [
           "whatsapp",
-          "sms"
+          "email"
         ],
+        "fanout": true,
         "intent": "switch_method",
-        "note": "Zero delay. They are looking at the error right now."
-      },
-      {
-        "at": "5m",
-        "action": "nudge",
-        "channels": [
-          "email",
-          "whatsapp"
-        ],
-        "intent": "reminder"
+        "note": "Zero delay and BOTH channels at once. They are looking at the error right now; the WhatsApp lands on their phone and the same link is in their inbox before they have left the page.\n"
       }
     ],
     "preconditions": [
@@ -218,27 +210,15 @@ export const RAW_POLICY_ROWS: readonly unknown[] = [
         "action": "nudge",
         "channels": [
           "whatsapp",
-          "sms"
+          "email"
         ],
+        "fanout": true,
         "intent": "switch_method",
         "suggest": [
           "retry_same",
           "upi_intent"
-        ]
-      },
-      {
-        "at": "5m",
-        "action": "nudge",
-        "channels": [
-          "email",
-          "whatsapp"
         ],
-        "intent": "reminder",
-        "suggest": [
-          "upi_intent",
-          "other_card"
-        ],
-        "note": "No retry_same on the second touch. If the OTP failed twice, sending them back for a third attempt risks costing them the card entirely.\n"
+        "note": "Both channels together. retry_same is offered here and only here — if the OTP fails again, diagnose.ts withdraws same-instrument retry before a third attempt can cost them the card.\n"
       }
     ],
     "preconditions": [
@@ -275,26 +255,15 @@ export const RAW_POLICY_ROWS: readonly unknown[] = [
         "action": "nudge",
         "channels": [
           "whatsapp",
-          "sms"
+          "email"
         ],
+        "fanout": true,
         "intent": "switch_method",
         "suggest": [
           "retry_same",
           "upi_intent"
-        ]
-      },
-      {
-        "at": "5m",
-        "action": "nudge",
-        "channels": [
-          "email",
-          "whatsapp"
         ],
-        "intent": "reminder",
-        "suggest": [
-          "upi_intent",
-          "other_card"
-        ]
+        "note": "Both channels together — a mistyped CVV is fixed in seconds or not at all."
       }
     ],
     "preconditions": [

@@ -218,10 +218,24 @@ export function movesMoney(action: Action): boolean {
  * Two callers, one function. A key format that lives in two places is a key
  * format that will disagree.
  */
-export function messageKey(caseId: string, rung: number, kind: Action['kind']): string {
-  return `${caseId}:${rung}:${kind}`;
+export function messageKey(
+  caseId: string,
+  rung: number,
+  kind: Action['kind'],
+  /**
+   * Only for a fanout rung, which sends on several channels at once.
+   *
+   * Omitted everywhere else, so every key this system has already written keeps
+   * its exact shape — adding the channel unconditionally would have changed the
+   * key for every existing row and made the whole duplicate guard forget every
+   * message ever sent.
+   */
+  channel?: Channel,
+): string {
+  const base = `${caseId}:${rung}:${kind}`;
+  return channel ? `${base}:${channel}` : base;
 }
 
-export function idempotencyKey(caseId: string, action: Action): string {
-  return messageKey(caseId, action.rung, action.kind);
+export function idempotencyKey(caseId: string, action: Action, channel?: Channel): string {
+  return messageKey(caseId, action.rung, action.kind, channel);
 }

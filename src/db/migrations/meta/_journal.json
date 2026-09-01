@@ -43,6 +43,13 @@
       "when": 1788180031401,
       "tag": "0005_ai_queues",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1788212896844,
+      "tag": "0006_modern_ultragirl",
+      "breakpoints": true
     }
   ]
 }

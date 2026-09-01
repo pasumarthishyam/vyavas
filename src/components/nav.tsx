@@ -8,6 +8,7 @@ const ITEMS = [
   { href: '/', label: 'Overview', icon: OverviewIcon },
   { href: '/recovery', label: 'Failed Payment Agent', icon: RecoveryIcon },
   { href: '/cases', label: 'Cases', icon: CasesIcon },
+  { href: '/agents/discount-caller', label: 'Discount Caller', icon: PhoneIcon },
 ];
 
 export function Nav({ switcher }: { switcher?: React.ReactNode }) {
@@ -169,6 +170,19 @@ function RecoveryIcon() {
         strokeLinecap="round"
       />
       <path d="M12.2 1.9v2.4H9.8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function PhoneIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path
+        d="M3.5 2.5h2l1 3-1.5 1.2a8 8 0 0 0 4.3 4.3L10.5 9.5l3 1v2a1 1 0 0 1-1.1 1C7.3 13 3 8.7 2.5 3.6a1 1 0 0 1 1-1.1Z"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }

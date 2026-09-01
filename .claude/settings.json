@@ -47,7 +47,16 @@
       "Bash(awk 'NR>=1672 && /^}$/ {print NR; exit}' src/components/recovery-console.tsx)",
       "PowerShell(npx vitest run tests/lib/redact.test.ts 2>&1)",
       "PowerShell(npx vitest run tests/ops/activity.test.ts 2>&1)",
-      "Bash(python -)"
+      "Bash(python -)",
+      "Bash(git branch *)",
+      "Read(//c/Users/Hp/Documents/Vyavas_AIrecovery/src/workflows/**)",
+      "Bash(grep -n \"const built = buildAction\\\\|const { action, channel }\\\\|const key = idempotencyKey\\\\|if \\(channel && \\(action.kind\" src/workflows/executor.ts)",
+      "Bash(grep -n \"channel: null,\\\\s*$\\\\|channel,\" src/workflows/executor.ts)",
+      "PowerShell(npx vitest run tests/workflows/fanout.test.ts 2>&1)",
+      "WebFetch(domain:docs.vapi.ai)",
+      "Bash(echo \"EXIT_CODE=$?\")",
+      "Bash(echo \"EXIT=$?\")",
+      "Bash(tee /tmp/full_test_run.log)"
     ]
   }
 }

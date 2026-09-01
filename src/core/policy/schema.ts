@@ -82,6 +82,30 @@ export const nudgeRungSchema = z
     /** Omit to inherit the rails the diagnosis already worked out. */
     suggest: z.array(enumOf(ALTERNATE_RAILS)).optional(),
     attachPaymentLink: z.boolean().default(true),
+    /**
+     * Send on EVERY eligible channel at once, not just the first.
+     *
+     * The default is one channel per rung, and for most of the table that is
+     * right: a second channel hours later is a follow-up, and sending both
+     * would just be two copies of the same nag.
+     *
+     * `customer_input` is the exception the flag exists for. That class is
+     * belt-and-braces by design — the customer is looking at a failed checkout
+     * right now, so they get WhatsApp AND the same link in their inbox while
+     * they still care. Expressed as two rungs it was not a pair at all: the
+     * second rung is a separate gate evaluation minutes later, and the gate is
+     * free to defer it (the live-attempt lock and the cool-off both apply), so
+     * the "pair" arrived three minutes apart or not at all.
+     *
+     * One rung, one gate decision, both messages. Deferral can move the pair;
+     * it can no longer split it.
+     *
+     * Each channel still gets its own `message_log` row and its own idempotency
+     * key, so the ledger stays truthful about how many messages a person
+     * received — and `compile.ts` counts a fanout rung as its channel count
+     * against `maxMessages` and the class ceiling, not as one.
+     */
+    fanout: z.boolean().default(false),
   })
   .strict();
 

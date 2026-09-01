@@ -71,3 +71,11 @@ export const escalationStatusEnum = pgEnum('escalation_status', [
 export const proposalStatusEnum = pgEnum('proposal_status', ['pending', 'accepted', 'rejected']);
 
 export const downtimeSeverityEnum = pgEnum('downtime_severity', ['low', 'medium', 'high']);
+
+export const voiceCallStatusEnum = pgEnum('voice_call_status', [
+  'queued',
+  'ringing',
+  'in_progress',
+  'ended',
+  'failed',
+]);

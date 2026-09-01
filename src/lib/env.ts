@@ -88,6 +88,41 @@ const schema = z.object({
 
   /** Public origin, for payment-link callbacks. */
   APP_URL: z.string().url().optional(),
+
+  // ── Voice agent (Vapi) ──
+  //
+  // A separate agent from the failed-payment ladder above — it places outbound
+  // calls and, within a fixed guardrail, may offer a discount. Kept out of the
+  // shared merchant settings deliberately: this is the one surface in the
+  // product that can move a price, and it should never inherit anything by
+  // accident from the messaging config next to it.
+  /** Server-to-server key, from Vapi's account settings. Never the public key. */
+  VAPI_API_KEY: z.string().min(1).optional(),
+  VAPI_ASSISTANT_ID: z.string().min(1).optional(),
+  /** The imported Twilio/Telnyx number's Vapi id — not the phone digits. */
+  VAPI_PHONE_NUMBER_ID: z.string().min(1).optional(),
+  /**
+   * Shared secret Vapi echoes back on every tool/webhook call.
+   *
+   * Optional on purpose, for now: verification degrades to "unverified" when
+   * this is unset rather than refusing to boot, so the trial phase (a closed
+   * platform, calls only to numbers on the allow-list below) is not blocked on
+   * it. Set it before this ever calls a real customer.
+   */
+  VAPI_SERVER_SECRET: z.string().min(1).optional(),
+  /**
+   * THE hard safety rail during trial. Comma-separated E.164 numbers.
+   *
+   * Checked in code before every outbound call is placed, independent of
+   * whatever is configured in Vapi or Twilio/Telnyx — so a wrong caseId or a
+   * bug in the case lookup can never result in dialing a real customer.
+   */
+  VOICE_AGENT_ALLOWED_TEST_NUMBERS: z.string().min(1).optional(),
+  /** Master switch, mirrors `merchants.executionEnabled`. Defaults off. */
+  VOICE_AGENT_ENABLED: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
 });
 
 export type Env = z.infer<typeof schema>;
@@ -214,4 +249,49 @@ export function requireAnthropicKey(): string {
 
 export function appUrl(): string {
   return env().APP_URL ?? 'http://localhost:3000';
+}
+
+export interface VapiConfig {
+  apiKey: string;
+  assistantId: string;
+  phoneNumberId: string;
+}
+
+export function requireVapiConfig(): VapiConfig {
+  return {
+    apiKey: required('VAPI_API_KEY', 'Vapi dashboard > your account > API Keys > Private Key.'),
+    assistantId: required('VAPI_ASSISTANT_ID', 'Vapi dashboard > Assistants > open yours > copy its id.'),
+    phoneNumberId: required(
+      'VAPI_PHONE_NUMBER_ID',
+      'Vapi dashboard > Phone Numbers > the imported number > copy its id (not the digits).',
+    ),
+  };
+}
+
+/** Null when unset — webhook verification degrades to "unverified" rather than failing to boot. */
+export function vapiServerSecret(): string | null {
+  return env().VAPI_SERVER_SECRET ?? null;
+}
+
+/**
+ * The hard-coded set of numbers this agent may ever dial.
+ *
+ * Parsed defensively: a stray space or an empty entry in the env var must
+ * never widen into "match anything" — an empty allow-list means nothing is
+ * allowed, not everything.
+ */
+export function allowedTestNumbers(): readonly string[] {
+  const raw = env().VOICE_AGENT_ALLOWED_TEST_NUMBERS ?? '';
+  return raw
+    .split(',')
+    .map((n) => n.trim())
+    .filter((n) => n.length > 0);
+}
+
+export function isAllowedTestNumber(phone: string): boolean {
+  return allowedTestNumbers().includes(phone);
+}
+
+export function voiceAgentEnabled(): boolean {
+  return env().VOICE_AGENT_ENABLED === true;
 }

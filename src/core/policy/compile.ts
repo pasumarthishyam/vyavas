@@ -43,6 +43,29 @@ function customerTouchRungs(row: PolicyRow) {
   return row.ladder.filter((r) => r.action === 'nudge' || r.action === 'send_pre_debit_notice');
 }
 
+/**
+ * How many MESSAGES a ladder can put in front of a person.
+ *
+ * Not the same as the rung count, and the difference is the whole reason this
+ * function exists. A `fanout` nudge sends on every eligible channel at once —
+ * one rung, one gate decision, two or three messages. Counting it as one would
+ * let a row declare `maxMessages: 2` and legally send four, with the ceiling
+ * cross-check below reporting that everything was within limits.
+ *
+ * The count is the rung's declared channel list, which is the worst case: at
+ * runtime only the channels the customer can actually receive on are used, so
+ * the real number is this or fewer. A safety ceiling is checked against the
+ * most a row could do, never against what it will probably do.
+ */
+function customerMessageCount(row: PolicyRow): number {
+  let total = 0;
+  for (const rung of row.ladder) {
+    if (rung.action === 'nudge') total += rung.fanout ? rung.channels.length : 1;
+    else if (rung.action === 'send_pre_debit_notice') total += 1;
+  }
+  return total;
+}
+
 /** Which cause classes a row can apply to. Unconstrained means all of them. */
 function applicableClasses(match: PolicyMatch): readonly CauseClass[] {
   return match.causeClass ?? CAUSE_CLASSES;
@@ -114,10 +137,15 @@ function checkRow(row: PolicyRow, issues: CompileIssue[]): void {
     previous = at;
   }
 
-  if (touches.length > row.maxMessages) {
+  // Messages, not rungs — a fanout rung is several. See `customerMessageCount`.
+  const messages = customerMessageCount(row);
+  if (messages > row.maxMessages) {
     add(
-      `ladder has ${touches.length} customer touch(es) but maxMessages is ${row.maxMessages}. ` +
-        `The trailing rungs can never fire — either raise the cap deliberately or drop them.`,
+      `ladder can send ${messages} customer message(s) but maxMessages is ${row.maxMessages}. ` +
+        `The trailing ones can never fire — either raise the cap deliberately or drop them.` +
+        (messages > touches.length
+          ? ` (A fanout rung counts once per channel: ${touches.length} rung(s), ${messages} message(s).)`
+          : ''),
     );
   }
 

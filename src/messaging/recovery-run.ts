@@ -204,11 +204,45 @@ export async function startRecovery(
     keySuffix: attempt,
   });
 
-  // ── Email, scheduled ──
+  /*
+   * ── Email: now, beside it, when the rung says fanout ──
+   *
+   * The console previously always scheduled the email as a `case_actions` row
+   * `FOLLOW_UP_SECONDS` out, and `fireDueFollowUps` re-ran the gate before
+   * sending it. That second gate evaluation is the problem: the live-attempt
+   * lock and the cool-off both apply again, so on this account the "30 second"
+   * follow-up landed about three minutes later — and could land much later, or
+   * never, depending on what the gate saw.
+   *
+   * When the resolved rung is a fanout rung the two messages are one decision,
+   * so the email goes out here, in the same breath as the WhatsApp, under the
+   * gate check that already passed. Nothing to defer, nothing to split.
+   *
+   * Non-fanout rungs keep the scheduled follow-up. A second channel hours later
+   * genuinely IS a separate decision and should be re-gated — that is the whole
+   * reason the gate runs per rung.
+   */
+  const firstRung = resolved.row.ladder[0];
+  const fansOut = firstRung?.action === 'nudge' && firstRung.fanout === true;
+
   const followUpAt = new Date(now.getTime() + FOLLOW_UP_SECONDS * 1000);
   let scheduled = false;
+  let email: StepResult | null = null;
 
-  if (gathered.customerEmail) {
+  if (gathered.customerEmail && fansOut) {
+    email = await deliver(db, {
+      caseId,
+      merchantId: row.merchantId,
+      gathered,
+      intent,
+      link,
+      channel: 'email',
+      rung: 0,
+      // Same rung, different channel — the key has to differ or the second
+      // send collapses into the first one's ledger row.
+      keySuffix: `${attempt}:email`,
+    });
+  } else if (gathered.customerEmail) {
     const inserted = await db
       .insert(caseActions)
       .values({
@@ -231,7 +265,12 @@ export async function startRecovery(
     merchantId: row.merchantId,
     kind: 'recovery_started',
     actor: 'console',
-    payload: { intent, whatsapp: whatsapp.status, followUpAt: scheduled ? followUpAt.toISOString() : null },
+    payload: {
+      intent,
+      whatsapp: whatsapp.status,
+      ...(email ? { email: email.status, pairedNow: true } : {}),
+      followUpAt: scheduled ? followUpAt.toISOString() : null,
+    },
   });
 
   /*
@@ -247,13 +286,15 @@ export async function startRecovery(
    * A dry run counts as success: it is supposed to send nothing, and it wrote
    * the ledger row that proves what it would have said.
    */
-  const didSomething =
-    whatsapp.status === 'sent' || whatsapp.status === 'suppressed' || scheduled;
+  const landed = (s: StepResult | null) => s?.status === 'sent' || s?.status === 'suppressed';
+  const didSomething = landed(whatsapp) || landed(email) || scheduled;
 
   return {
     ok: didSomething,
     caseId,
-    steps: [whatsapp],
+    // Both halves of the pair, so the console reports what actually went out
+    // rather than only the first channel.
+    steps: email ? [whatsapp, email] : [whatsapp],
     followUpAt: scheduled ? followUpAt.toISOString() : null,
     ...(didSomething ? {} : { reason: `${whatsapp.channel}: ${whatsapp.detail}` }),
     // Distinguishes "cannot" from "already did". Only the second is worth

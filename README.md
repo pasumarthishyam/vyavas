@@ -8,6 +8,21 @@ subscriptions and overdue receivables.
 
 ---
 
+## Documentation
+
+Full docs live in [`docs/`](./docs/README.md). This README is the build-and-run
+reference; the docs explain the design.
+
+| Document | Answers |
+|---|---|
+| [How it works](./docs/01-how-it-works.md) | What happens between a failed payment and a recovered one |
+| [Failure scenarios](./docs/02-failure-scenarios.md) | All 44 failure reasons, the 9 classes, and what each one does |
+| [Where the AI is](./docs/03-ai.md) | What Claude does, what it is forbidden from doing, and why |
+| [Safety and guarantees](./docs/04-safety.md) | The invariants, and what enforces each one |
+| [Operating it](./docs/05-operations.md) | Commands, verification, and what to check when something looks wrong |
+
+---
+
 ## The one idea
 
 Those four problems look like four products. They are one object:

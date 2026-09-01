@@ -4,53 +4,61 @@
 # takes seconds, and the customer is very often still on the page.
 #
 # The only rule that matters here is SPEED. Intent decays in minutes. A ladder
-# that opens at 30 minutes has already lost most of what it could have recovered.
-# This is the one class whose floor is zero.
+# that opens at 30 minutes has already lost most of what it could have
+# recovered. This is the one class whose floor is zero.
 #
-# ── why the second touch is email ──
+# ── one rung, both channels ──
 #
-# Every other class ends its ladder on a different channel from the one it
-# opened on — auth_friction, funds_limits, instrument_dead and transient_infra
-# all close on `[email, sms]`. This class did not: both of its rungs were
-# WhatsApp, and because `selectChannel` picks ONE channel per rung, that meant a
-# customer_input case could never send an email at any point in its life. The
-# gap was invisible from the outside; it just looked like email was broken.
+# WhatsApp AND email go out together at 0m, on a single `fanout: true` rung.
 #
-# It also wasted the second touch. A repeat WhatsApp is the weakest possible
-# follow-up: if the first one did not land — no WhatsApp account, template
-# undelivered, notifications off — the second one fails for exactly the same
-# reason. A different channel is the only follow-up that adds information.
+# This was two rungs — WhatsApp at 0m, email at 5m — and the intent behind that
+# was always belt-and-braces: tell them on WhatsApp and put the same link in
+# their inbox while they still care. It did not work, for a reason that is
+# structural rather than a matter of tuning the offset.
 #
-# `[email, whatsapp]` rather than the house `[email, sms]`: there is no SMS
-# client (see workflows/channels.ts — only whatsapp and email are built), so an
-# sms fallback silently resolves to nothing. WhatsApp is the honest fallback for
-# a customer with no email on file.
+# A second rung is a SECOND GATE EVALUATION. Everything the gate is entitled to
+# defer on applies again: the live-attempt lock (`live_attempt_lock_minutes`,
+# 3 on this account), the cool-off (`min_gap_minutes`), quiet hours. So the
+# email did not arrive five minutes later — it arrived whenever the gate next
+# let it through, observed in production at about three minutes and capable of
+# being much longer. A pair that arrives minutes apart is not a pair; it is a
+# first message and a nag.
 #
-# Still two touches. The class ceiling was raised to `maxCustomerTouches: 4`
-# (see cause-class.ts) so this class has room for a longer ladder, but a ceiling
-# is not a target and the ladders below deliberately still stop at two. Adding a
-# third rung is a separate, deliberate decision about whether a third message
-# about a typo helps or nags — the compiler now permits it; nothing about the
-# raised ceiling sends it.
+# On one rung there is one gate decision. Deferral can still move the pair —
+# quiet hours are quiet hours — but it can no longer SPLIT it. Either both go
+# or neither does, which is the behaviour the two-rung version was reaching for.
 #
-# ── why the second touch moved from 45m to 5m ──
+# Each channel still writes its own `message_log` row and its own idempotency
+# key, so the ledger remains truthful about how many messages a person got, and
+# `compile.ts` counts this rung as two against `maxMessages` and the class
+# ceiling rather than as one.
 #
-# At 45 minutes the email was correct as a *reminder* and useless as a *pair*.
-# The intended behaviour is belt-and-braces: the customer is looking at a failed
-# checkout right now, so tell them on WhatsApp and put the same link in their
-# inbox while they still care. Three quarters of an hour later is a different
-# message to a different, colder person — and in practice it read as "email is
-# broken", because nobody watches a case for 45 minutes to find out otherwise.
+# ── the cost, stated plainly ──
 #
-# 5m rather than seconds: WhatsApp usually lands first, and the gap gives it a
-# moment to be acted on before a second notification arrives.
+# The per-person daily cap counts MESSAGES, not rungs, so this pair spends TWO
+# slots at once. On the default `frequency_cap_per_day` of 2 the pair is that
+# person's entire budget for the day, and any other live case for them will
+# defer until the window rolls.
 #
-# One interaction worth knowing. The merchant-level `min_gap_minutes` cool-off
-# is checked unconditionally and applies across channels, so on an account with
-# the production default of 15 this rung defers to roughly the 15-minute mark
-# rather than firing at 5. It DOES then fire — a deferred rung is now
-# rescheduled rather than dropped — so the outcome is "a bit later", not "never".
-# Set `min_gap_minutes` to 5 on an account that wants the pair tight.
+# That is the honest accounting — they did receive two messages — and it is the
+# thing to check before adding a third rung here: on a default account the third
+# rung would defer rather than fire, and the deferral would look like a timing
+# problem rather than a budget one. Raise `frequency_cap_per_day` deliberately
+# if this class is ever extended.
+#
+# ── why email, not sms ──
+#
+# There is no SMS client (see workflows/channels.ts — only whatsapp and email
+# are built), so an sms entry silently resolves to nothing. Email is the honest
+# second channel, and it is the one that survives a customer having no WhatsApp
+# account at all.
+#
+# ── the ceiling ──
+#
+# The class ceiling was raised to `maxCustomerTouches: 4` (see cause-class.ts),
+# so there is room for a later reminder. These ladders deliberately do not use
+# it: two messages at the moment of failure, then silence. A third message about
+# a typo is nagging, and adding one is a separate, deliberate decision.
 
 - id: customer_input.default
   version: 1
@@ -63,13 +71,13 @@
   ladder:
     - at: 0m
       action: nudge
-      channels: [whatsapp, sms]
+      channels: [whatsapp, email]
+      fanout: true
       intent: switch_method
-      note: Zero delay. They are looking at the error right now.
-    - at: 5m
-      action: nudge
-      channels: [email, whatsapp]
-      intent: reminder
+      note: >
+        Zero delay and BOTH channels at once. They are looking at the error
+        right now; the WhatsApp lands on their phone and the same link is in
+        their inbox before they have left the page.
   preconditions:
     [order_unpaid, no_live_attempt, consent_ok, not_quiet_hours, within_frequency_cap, channel_deliverable]
   abortOn: [order_paid, payment_link_paid, customer_optout, deadline_passed]
@@ -90,17 +98,14 @@
   ladder:
     - at: 0m
       action: nudge
-      channels: [whatsapp, sms]
+      channels: [whatsapp, email]
+      fanout: true
       intent: switch_method
       suggest: [retry_same, upi_intent]
-    - at: 5m
-      action: nudge
-      channels: [email, whatsapp]
-      intent: reminder
-      suggest: [upi_intent, other_card]
       note: >
-        No retry_same on the second touch. If the OTP failed twice, sending them
-        back for a third attempt risks costing them the card entirely.
+        Both channels together. retry_same is offered here and only here — if
+        the OTP fails again, diagnose.ts withdraws same-instrument retry before
+        a third attempt can cost them the card.
   preconditions:
     [order_unpaid, no_live_attempt, consent_ok, not_quiet_hours, within_frequency_cap, channel_deliverable]
   abortOn: [order_paid, payment_link_paid, customer_optout, deadline_passed]
@@ -117,14 +122,11 @@
   ladder:
     - at: 0m
       action: nudge
-      channels: [whatsapp, sms]
+      channels: [whatsapp, email]
+      fanout: true
       intent: switch_method
       suggest: [retry_same, upi_intent]
-    - at: 5m
-      action: nudge
-      channels: [email, whatsapp]
-      intent: reminder
-      suggest: [upi_intent, other_card]
+      note: Both channels together — a mistyped CVV is fixed in seconds or not at all.
   preconditions:
     [order_unpaid, no_live_attempt, consent_ok, not_quiet_hours, within_frequency_cap, channel_deliverable]
   abortOn: [order_paid, payment_link_paid, customer_optout, deadline_passed]

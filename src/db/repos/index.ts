@@ -7,3 +7,4 @@ export * from './customers.js';
 export * from './alerts.js';
 export * from './escalations.js';
 export * from './proposals.js';
+export * from './voice-calls.js';

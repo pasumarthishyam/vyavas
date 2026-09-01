@@ -139,3 +139,16 @@ export function createPaymentLink(client: RazorpayClient, input: CreatePaymentLi
 export function cancelPaymentLink(client: RazorpayClient, linkId: string) {
   return client.post<RazorpayPaymentLinkEntity>(`/payment_links/${linkId}/cancel`, {});
 }
+
+/**
+ * Fetch a payment link's current status directly.
+ *
+ * Used by the voice agent to confirm payment on a link it created itself,
+ * rather than depending on the shared `payment_link.paid` webhook — that
+ * webhook resolves back to a case by the ORIGINAL failed order's id, and a
+ * link created fresh mid-call does not carry one. Asking Razorpay directly
+ * for the status of the specific link this agent made is unambiguous.
+ */
+export function fetchPaymentLink(client: RazorpayClient, linkId: string) {
+  return client.get<RazorpayPaymentLinkEntity>(`/payment_links/${linkId}`);
+}
