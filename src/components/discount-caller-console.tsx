@@ -1,9 +1,21 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import Vapi from '@vapi-ai/web';
 
 import { causeLabel, inr, relativeTime } from './ui';
 import type { CallableCase, VoiceCallRow } from '../db/queries/voice-agent';
+
+type WebCallState = 'connecting' | 'active' | 'ended';
+
+/** Vapi's SDK doesn't publicly document the shape it hands back here — read defensively. */
+function extractCallId(value: unknown): string | null {
+  if (value && typeof value === 'object') {
+    const id = (value as { id?: unknown; call?: { id?: unknown } }).id ?? (value as { call?: { id?: unknown } }).call?.id;
+    if (typeof id === 'string' && id.length > 0) return id;
+  }
+  return null;
+}
 
 /**
  * The "place a call" surface, and the call history behind it.
@@ -28,6 +40,8 @@ export function DiscountCallerConsole({
   const [notice, setNotice] = useState<string | null>(null);
   const [calls, setCalls] = useState(initialCalls);
   const [syncing, setSyncing] = useState(false);
+  const [webCall, setWebCall] = useState<{ caseId: string; state: WebCallState } | null>(null);
+  const vapiRef = useRef<InstanceType<typeof Vapi> | null>(null);
 
   const calledCaseIds = new Set(calls.map((c) => c.caseId));
   const hasPending = calls.some((c) => c.status === 'queued' || c.status === 'ringing' || c.status === 'in_progress');
@@ -80,8 +94,96 @@ export function DiscountCallerConsole({
     }
   }
 
+  /**
+   * A call over the browser's own microphone — WebRTC to Vapi directly, no
+   * telephony carrier involved at all. Same assistant, same tools, same
+   * guardrail; the only thing that's different from a real phone call is the
+   * transport, and the webhook doesn't know or care which one it was.
+   */
+  async function startWebCall(caseId: string) {
+    const publicKey = process.env.NEXT_PUBLIC_VAPI_PUBLIC_KEY;
+    const assistantId = process.env.NEXT_PUBLIC_VAPI_ASSISTANT_ID;
+    if (!publicKey || !assistantId) {
+      setNotice('Web call is not configured — set NEXT_PUBLIC_VAPI_PUBLIC_KEY and NEXT_PUBLIC_VAPI_ASSISTANT_ID.');
+      return;
+    }
+
+    setNotice(null);
+    setWebCall({ caseId, state: 'connecting' });
+
+    const vapi = new Vapi(publicKey);
+    vapiRef.current = vapi;
+
+    let registered = false;
+    const registerOnce = async (vapiCallId: string | null) => {
+      if (registered || !vapiCallId) return;
+      registered = true;
+      try {
+        await fetch('/api/voice-agent/web-calls', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ caseId, vapiCallId }),
+        });
+        await refreshCalls();
+      } catch {
+        // The webhook has its own fallback (resolveVoiceCall, keyed off the
+        // call's metadata) — a failed registration here is not fatal.
+      }
+    };
+
+    vapi.on('call-start', () => {
+      setWebCall({ caseId, state: 'active' });
+    });
+    vapi.on('call-end', () => {
+      setWebCall({ caseId, state: 'ended' });
+      vapiRef.current = null;
+      void refreshCalls();
+    });
+    vapi.on('error', (e: unknown) => {
+      setNotice(e instanceof Error ? e.message : 'Web call error');
+      setWebCall(null);
+      vapiRef.current = null;
+    });
+
+    try {
+      // `metadata` is attempted here as a first path to the case id; the
+      // webhook's `resolveVoiceCall` fallback reads it if this lands, and
+      // `registerOnce` below is the second, independent path — whichever one
+      // succeeds is enough.
+      const started = await vapi.start(assistantId, { metadata: { caseId } } as never);
+      await registerOnce(extractCallId(started));
+    } catch (e) {
+      setNotice(e instanceof Error ? e.message : 'Could not start the web call');
+      setWebCall(null);
+      vapiRef.current = null;
+    }
+  }
+
+  function stopWebCall() {
+    vapiRef.current?.stop();
+  }
+
   return (
     <>
+      {webCall && (
+        <div className="notice" style={{ marginBottom: 12 }}>
+          <span>
+            {webCall.state === 'connecting' && 'Connecting the web call — allow microphone access if prompted…'}
+            {webCall.state === 'active' && 'Web call is live — talk into your microphone. '}
+            {webCall.state === 'ended' && 'Web call ended. '}
+          </span>
+          {webCall.state !== 'ended' ? (
+            <button type="button" className="btn-ghost" onClick={stopWebCall}>
+              Hang up
+            </button>
+          ) : (
+            <button type="button" className="btn-ghost" onClick={() => setWebCall(null)}>
+              Dismiss
+            </button>
+          )}
+        </div>
+      )}
+
       <section className="card">
         {notice && (
           <div className="notice" style={{ margin: '12px 20px 0' }}>
@@ -118,7 +220,16 @@ export function DiscountCallerConsole({
                       <div className="cell-sub mono">{c.customerPhone}</div>
                     </td>
                     <td className="muted nowrap">{relativeTime(new Date(c.createdAt))}</td>
-                    <td className="row-action">
+                    <td className="row-action" style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                      <button
+                        type="button"
+                        className="btn-ghost btn-sm"
+                        disabled={webCall !== null}
+                        onClick={() => void startWebCall(c.id)}
+                        title="Talk to the agent through your browser's microphone — no phone, no carrier, no cost beyond Vapi's own credit."
+                      >
+                        Web call
+                      </button>
                       <button
                         type="button"
                         className="btn-primary btn-sm"

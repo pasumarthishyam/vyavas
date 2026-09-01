@@ -123,6 +123,23 @@ const schema = z.object({
     .enum(['true', 'false'])
     .optional()
     .transform((v) => v === 'true'),
+
+  /**
+   * Client-side pair for the browser "web call" path (WebRTC, no telephony
+   * carrier at all — see `components/discount-caller-console.tsx`).
+   *
+   * NEXT_PUBLIC_-prefixed, so Next.js inlines these into the browser bundle
+   * at BUILD time. Listed here only so `env()` documents their existence and
+   * this schema stays the one place that names every variable the app reads —
+   * the actual client code reads `process.env.NEXT_PUBLIC_...` directly
+   * rather than through this module, which is the only pattern Next.js's
+   * static inlining actually works with.
+   *
+   * The public key is meant to be exposed in a browser; it is not the
+   * server-to-server VAPI_API_KEY above.
+   */
+  NEXT_PUBLIC_VAPI_PUBLIC_KEY: z.string().min(1).optional(),
+  NEXT_PUBLIC_VAPI_ASSISTANT_ID: z.string().min(1).optional(),
 });
 
 export type Env = z.infer<typeof schema>;

@@ -42,6 +42,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.122.0",
+    "@vapi-ai/web": "^2.7.0",
     "drizzle-orm": "^0.45.2",
     "inngest": "^4.18.1",
     "next": "^15.5.24",

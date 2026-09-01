@@ -5,6 +5,7 @@ import { appendEvent, getCase, transitionCase } from '../../../../db/repos/cases
 import { getCustomer } from '../../../../db/repos/customers';
 import { getMerchant } from '../../../../db/queries/dashboard';
 import {
+  createVoiceCall,
   getVoiceCallByVapiId,
   markPaymentConfirmed,
   recordDiscountOffer,
@@ -72,6 +73,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     if (!message.call.id) {
       return NextResponse.json({ ok: false, reason: 'no call id on tool-calls message' }, { status: 400 });
     }
+    await resolveVoiceCall(db, message.call.id, message.call.metadata);
     const results: ToolResult[] = [];
     for (const call of message.toolCalls) {
       results.push(await handleToolCall(db, message.call.id, call));
@@ -81,6 +83,7 @@ export async function POST(request: Request): Promise<NextResponse> {
 
   if (message.type === 'end-of-call-report') {
     if (message.call.id) {
+      await resolveVoiceCall(db, message.call.id, message.call.metadata);
       await handleEndOfCall(db, message.call.id, message);
     }
     return NextResponse.json({ ok: true });
@@ -96,6 +99,40 @@ function mapStatus(raw: string): 'queued' | 'ringing' | 'in_progress' | 'ended' 
   const s = raw.replace(/-/g, '_');
   if (s === 'queued' || s === 'ringing' || s === 'in_progress' || s === 'ended' || s === 'failed') return s;
   return 'in_progress';
+}
+
+/**
+ * Make sure a `voice_calls` row exists for this call before anything else
+ * touches it.
+ *
+ * The normal path is that `/api/voice-agent/calls` (a real phone call) or
+ * `/api/voice-agent/web-calls` (a browser call) already created the row.
+ * This is the fallback for when neither happened in time — a race, or a web
+ * call whose client-side registration failed — using whatever `metadata`
+ * Vapi handed back on the call itself. Belt and braces: two independent
+ * paths that both try to establish the same mapping, so the discount
+ * guardrail and payment link still have a case to work with either way.
+ */
+async function resolveVoiceCall(
+  db: Database,
+  vapiCallId: string,
+  metadata: Record<string, unknown>,
+): Promise<void> {
+  const existing = await getVoiceCallByVapiId(db, vapiCallId);
+  if (existing) return;
+
+  const caseId = typeof metadata.caseId === 'string' ? metadata.caseId : null;
+  if (!caseId) return;
+
+  const recoveryCase = await getCase(db, caseId);
+  if (!recoveryCase) return;
+
+  await createVoiceCall(db, {
+    caseId: recoveryCase.id,
+    merchantId: recoveryCase.merchantId,
+    vapiCallId,
+    customerPhone: 'web-call',
+  });
 }
 
 // ─── tool calls ──────────────────────────────────────────────────────────────
