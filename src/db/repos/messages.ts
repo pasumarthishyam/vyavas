@@ -10,12 +10,26 @@
  * decide there is room, and the person gets three.
  */
 
-import { and, count, eq, gt, isNull, sql } from 'drizzle-orm';
+import { and, count, eq, gt, isNull, notInArray, sql } from 'drizzle-orm';
 
 import type { Database } from '../client.js';
 import { messageLog } from '../schema/messaging.js';
 import { customers } from '../schema/customers.js';
 import { withCustomerLock } from './locks.js';
+
+/**
+ * Intents that are real sends — not holdout, not suppressed — but that do not
+ * draw on the ladder's daily frequency budget.
+ *
+ * `call_follow_up` (the discount-caller agent's payment-link email) is the
+ * first of these: it is a follow-up to a call the customer was just ON, not
+ * an unprompted outbound touch, and it must never be able to eat the budget a
+ * failed-payment case needs, or be blocked by a cap that has nothing to do
+ * with it. Same reasoning as the `suppressedReason` exemption just below, for
+ * a different situation — that one is "nothing was sent," this one is "it was
+ * sent, but it isn't the kind of touch the cap exists to limit."
+ */
+const CAP_EXEMPT_INTENTS = ['call_follow_up'] as const;
 
 export interface RecordMessageInput {
   merchantId: string;
@@ -55,6 +69,7 @@ export async function countRecentMessages(
         // Suppressed rows are holdout/dry-run records. They must not consume a
         // real customer's budget, or the holdout would suppress treatment too.
         isNull(messageLog.suppressedReason),
+        notInArray(messageLog.intent, [...CAP_EXEMPT_INTENTS]),
         gt(messageLog.sentAt, sql`now() - make_interval(hours => ${hours})`),
       ),
     );
@@ -85,8 +100,9 @@ export async function recordMessageIfPermitted(
     }
 
     const isSuppressed = input.suppressedReason != null;
+    const isCapExempt = (CAP_EXEMPT_INTENTS as readonly string[]).includes(input.intent);
 
-    if (!isSuppressed) {
+    if (!isSuppressed && !isCapExempt) {
       const recent = await countRecentMessages(tx, input.customerId, 24);
       if (recent >= cap) {
         return { permitted: false, reason: 'frequency_cap', recentCount: recent } as const;

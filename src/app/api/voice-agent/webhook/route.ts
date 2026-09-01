@@ -16,11 +16,13 @@ import {
 import { vapiServerSecret } from '../../../../lib/env';
 import { SECRET_HEADER, verifyVapiWebhook } from '../../../../adapters/vapi/webhook';
 import { parseEnvelope, type ParsedVapiMessage, type VapiToolCall } from '../../../../adapters/vapi/types';
-import { razorpayForMerchant } from '../../../../workflows/merchant-clients';
+import { razorpayForMerchant, channelsForMerchant } from '../../../../workflows/merchant-clients';
 import { cancelPaymentLink, createPaymentLink, fetchPaymentLink } from '../../../../adapters/razorpay/resources';
 import { proposeDiscount } from '../../../../core/guards/discount';
 import type { CauseClass } from '../../../../core/taxonomy/cause-class';
 import { formatINR, paise, type Paise } from '../../../../core/money';
+import { compose } from '../../../../messaging/compose';
+import { sendMessage } from '../../../../messaging/send';
 
 /**
  * Everything Vapi calls back into.
@@ -217,11 +219,19 @@ async function handleCreatePaymentLink(db: Database, vapiCallId: string): Promis
   try {
     // A separate link from the ladder's — never touches recoveryCases's own
     // payment-link columns. See db/schema/voice.ts for why.
+    //
+    // referenceId is scoped to THIS voice call, not the bare case id.
+    // Razorpay enforces uniqueness on reference_id per merchant — the case id
+    // alone collides with the ladder's own link on the same case (or with a
+    // second call placed on the same case), and the 400 that produces was
+    // read out to a real customer mid-call before this fix.
+    const referenceId = `${recoveryCase.id}:voice:${voiceCall.id}`;
+
     const link = await createPaymentLink(razorpay, {
       amountPaise,
       currency: 'INR',
       description: `Payment to ${merchant.name} — ${formatINR(amountPaise, { compact: true })}`,
-      referenceId: recoveryCase.id,
+      referenceId,
       customer: {
         ...(customer?.name ? { name: customer.name } : {}),
         ...(customer?.email ? { email: customer.email } : {}),
@@ -245,17 +255,106 @@ async function handleCreatePaymentLink(db: Database, vapiCallId: string): Promis
 
     await recordPaymentLink(db, vapiCallId, { id, url, amountPaise });
 
+    const emailed = await sendPaymentLinkFollowUpEmail(db, {
+      caseId: recoveryCase.id,
+      merchantId: recoveryCase.merchantId,
+      merchantName: merchant.name,
+      frequencyCapPerDay: merchant.frequencyCapPerDay,
+      customerId: recoveryCase.customerId,
+      customerName: customer?.name ?? null,
+      customerEmail: customer?.email ?? null,
+      customerLocale: customer?.locale ?? null,
+      voiceCallId: voiceCall.id,
+      url,
+      amountPaise,
+    });
+
     await appendEvent(db, {
       caseId: recoveryCase.id,
       merchantId: recoveryCase.merchantId,
       kind: 'voice_payment_link_created',
       actor: 'voice_agent',
-      payload: { vapiCallId, paymentLinkId: id, url, amountPaise },
+      payload: { vapiCallId, paymentLinkId: id, url, amountPaise, emailed },
     });
 
-    return `Payment link created for ${formatINR(amountPaise)}: ${url} — read this link to the customer clearly, slowly, and offer to text it as well.`;
+    const emailNote = customer?.email
+      ? emailed
+        ? `It has also been emailed to ${customer.email} — mention that.`
+        : `Emailing it to ${customer.email} did not succeed — do not claim it was sent by email.`
+      : 'No email address is on file, so it could not be emailed — do not claim it was sent by email.';
+
+    return `Payment link created for ${formatINR(amountPaise)}: ${url} — read this link to the customer clearly, slowly. ${emailNote}`;
   } catch (e) {
     return `Could not create the payment link (${e instanceof Error ? e.message : String(e)}). Tell the customer someone will follow up.`;
+  }
+}
+
+/**
+ * Email the link through the SAME send path the failed-payment ladder uses —
+ * `compose()` then `sendMessage()` — rather than a parallel one-off client.
+ * There is only one system that is allowed to put a message in front of a
+ * customer, and going around it (even for a good reason) is how a customer
+ * ends up double-messaged: this call now counts against the same daily
+ * frequency cap the ladder's own touches do, is blocked by the same opt-out
+ * flag, and lands in the same `message_log` audit trail — indistinguishable
+ * from any other email this product sends, except for its `call_follow_up`
+ * intent and a `voice:<callId>:email` idempotency key so a retried tool call
+ * can never send it twice.
+ *
+ * Never throws: a failed send should not undo a link that was already
+ * created and already read aloud on the call.
+ */
+async function sendPaymentLinkFollowUpEmail(
+  db: Database,
+  input: {
+    caseId: string;
+    merchantId: string;
+    merchantName: string;
+    frequencyCapPerDay: number;
+    customerId: string | null;
+    customerName: string | null;
+    customerEmail: string | null;
+    customerLocale: string | null;
+    voiceCallId: string;
+    url: string;
+    amountPaise: Paise;
+  },
+): Promise<boolean> {
+  if (!input.customerId || !input.customerEmail) return false;
+
+  try {
+    const composed = compose({
+      intent: 'call_follow_up',
+      locale: input.customerLocale,
+      customerName: input.customerName,
+      merchantName: input.merchantName,
+      amountPaise: input.amountPaise,
+      paymentLink: input.url,
+    });
+    if (!composed.ok) return false;
+
+    const channels = await channelsForMerchant(db, input.merchantId);
+
+    const outcome = await sendMessage({
+      db,
+      merchantId: input.merchantId,
+      customerId: input.customerId,
+      caseId: input.caseId,
+      rung: 0,
+      channel: 'email',
+      message: composed.message,
+      merchantName: input.merchantName,
+      phone: null,
+      email: input.customerEmail,
+      frequencyCap: input.frequencyCapPerDay,
+      idempotencyKey: `voice:${input.voiceCallId}:email`,
+      suppressedReason: null,
+      channels,
+    });
+
+    return outcome.status === 'sent';
+  } catch {
+    return false;
   }
 }
 

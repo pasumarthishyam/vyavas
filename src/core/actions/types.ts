@@ -45,6 +45,14 @@ export const MESSAGE_INTENTS = [
   'invoice_due',
   /** Guidance the customer must act on at their bank (e.g. enable online txns). */
   'bank_action_required',
+  /**
+   * The payment link agreed on a call (the discount-caller agent), sent as a
+   * follow-up. Never mentions a discount by name — a template that did would
+   * flip WhatsApp's category from UTILITY to MARKETING, which is why none of
+   * the templates in this set ever do. It states the final payable amount,
+   * same as every other intent here.
+   */
+  'call_follow_up',
 ] as const;
 export type MessageIntent = (typeof MESSAGE_INTENTS)[number];
 

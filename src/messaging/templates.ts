@@ -204,6 +204,21 @@ export const TEMPLATES: readonly TemplateDefinition[] = [
       'process question ("send it to our AP portal", "we need a PO"), and inviting it opens the ' +
       '24-hour window where a human can answer freely.',
   }),
+  T({
+    name: 'vyavas_call_follow_up_en',
+    intent: 'call_follow_up',
+    category: 'UTILITY',
+    language: 'en',
+    body:
+      'Hi {{1}}, as discussed on the call, here is your payment link for {{2}} to {{3}}: {{4}}\n\n' +
+      'Thanks for your time today.',
+    variables: ['customer_name', 'amount', 'merchant_name', 'payment_link'],
+    examples: ['Rahul', 'Rs 1,843', 'Kirana Cloud', 'https://rzp.io/i/example'],
+    rationale:
+      'The email follow-up after a discount-caller call. States the final payable amount only — ' +
+      'never the word "discount" — for the same reason every other template here avoids it: it is ' +
+      'what keeps this in the UTILITY category rather than MARKETING.',
+  }),
 ];
 
 // ─── lookup ──────────────────────────────────────────────────────────────────
