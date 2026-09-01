@@ -56,7 +56,9 @@
       "WebFetch(domain:docs.vapi.ai)",
       "Bash(echo \"EXIT_CODE=$?\")",
       "Bash(echo \"EXIT=$?\")",
-      "Bash(tee /tmp/full_test_run.log)"
+      "Bash(tee /tmp/full_test_run.log)",
+      "Bash(echo \"TSC=$?\")",
+      "Bash(echo \"ESLINT=$?\")"
     ]
   }
 }

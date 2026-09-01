@@ -129,6 +129,49 @@ export async function markPaymentConfirmed(db: Database, vapiCallId: string): Pr
     .where(eq(voiceCalls.vapiCallId, vapiCallId));
 }
 
+/** Calls with no terminal status yet — what a status sync needs to check. */
+export async function listPendingVoiceCalls(db: Database, merchantId: string) {
+  return db
+    .select()
+    .from(voiceCalls)
+    .where(
+      and(
+        eq(voiceCalls.merchantId, merchantId),
+        sql`${voiceCalls.status} in ('queued', 'ringing', 'in_progress')`,
+      ),
+    );
+}
+
+/**
+ * Apply a status snapshot fetched directly from Vapi's API.
+ *
+ * The fallback path for when Vapi's account-level Server URL was never
+ * configured (or is briefly unreachable) and the normal webhook events never
+ * arrive — see `/api/voice-agent/sync`. Deliberately narrower than
+ * `recordEndOfCall`: no transcript or recording, because Vapi's `GET /call`
+ * response doesn't carry the full artifact the webhook does.
+ */
+export async function syncVoiceCallFromVapi(
+  db: Database,
+  vapiCallId: string,
+  snapshot: {
+    status: 'queued' | 'ringing' | 'in_progress' | 'ended' | 'failed';
+    endedReason: string | null;
+    durationSeconds: number | null;
+  },
+): Promise<void> {
+  await db
+    .update(voiceCalls)
+    .set({
+      status: snapshot.status,
+      endedReason: snapshot.endedReason,
+      durationSeconds: snapshot.durationSeconds,
+      updatedAt: sql`now()`,
+      ...(snapshot.status === 'ended' || snapshot.status === 'failed' ? { endedAt: sql`now()` } : {}),
+    })
+    .where(eq(voiceCalls.vapiCallId, vapiCallId));
+}
+
 export async function listRecentVoiceCalls(db: Database, merchantId: string, limit = 50) {
   return db
     .select()

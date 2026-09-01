@@ -4,7 +4,6 @@ import { getMerchant } from '../../../db/queries/dashboard';
 import { getCallableCases, getRecentVoiceCallRows } from '../../../db/queries/voice-agent';
 import { allowedTestNumbers, voiceAgentEnabled } from '../../../lib/env';
 import { Empty } from '../../../components/charts';
-import { inr, relativeTime } from '../../../components/ui';
 import { DiscountCallerConsole } from '../../../components/discount-caller-console';
 
 export const dynamic = 'force-dynamic';
@@ -73,54 +72,6 @@ export default async function DiscountCallerPage() {
       </div>
 
       <DiscountCallerConsole cases={cases} calls={calls} />
-
-      <section className="card" style={{ marginTop: 20 }}>
-        <div className="panel-head">
-          <span className="panel-title">Call history</span>
-        </div>
-        {calls.length === 0 ? (
-          <p className="subtle" style={{ padding: '16px 20px' }}>
-            No calls placed yet.
-          </p>
-        ) : (
-          <div className="table-wrap">
-            <table className="data">
-              <thead>
-                <tr>
-                  <th>Phone</th>
-                  <th>Status</th>
-                  <th>Discount</th>
-                  <th>Link</th>
-                  <th>Paid</th>
-                  <th>Placed</th>
-                </tr>
-              </thead>
-              <tbody>
-                {calls.map((c) => (
-                  <tr key={c.id}>
-                    <td className="mono muted">{c.customerPhone}</td>
-                    <td>{c.status.replace(/_/g, ' ')}</td>
-                    <td className="muted">
-                      {c.discountAmountPaise ? `${inr(c.discountAmountPaise)} (tier ${c.discountTierOffered})` : '—'}
-                    </td>
-                    <td>
-                      {c.paymentLinkUrl ? (
-                        <a href={c.paymentLinkUrl} target="_blank" rel="noreferrer" className="mono">
-                          {inr(c.paymentLinkAmountPaise ?? 0)}
-                        </a>
-                      ) : (
-                        '—'
-                      )}
-                    </td>
-                    <td>{c.paymentConfirmedAt ? 'Yes' : c.paymentLinkUrl ? 'Not yet' : '—'}</td>
-                    <td className="muted">{relativeTime(new Date(c.createdAt))}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
 
       <p className="subtle" style={{ marginTop: 20, fontSize: 12.5 }}>
         Discounts here are capped at <strong style={{ fontWeight: 550 }}>₹500 total</strong>, offered

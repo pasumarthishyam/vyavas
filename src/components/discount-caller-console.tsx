@@ -1,28 +1,65 @@
 'use client';
 
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 import { causeLabel, inr, relativeTime } from './ui';
 import type { CallableCase, VoiceCallRow } from '../db/queries/voice-agent';
 
 /**
- * The "place a call" surface.
+ * The "place a call" surface, and the call history behind it.
  *
- * Deliberately manual, one case at a time — this is the trial phase, and a
- * button a person clicks is the right amount of ceremony for an agent that
- * dials a phone and can offer money. Nothing here auto-fires.
+ * Both live in one client component now — not for tidiness, but because the
+ * history needs to update itself. Vapi's own webhook requires a Server URL
+ * configured on the ASSISTANT (separate from the per-tool Server URL, and
+ * easy to miss — it was missed here once already), so this cannot assume the
+ * webhook is the only way status ever arrives. "Sync status" asks Vapi
+ * directly instead, and any call still in flight is synced automatically on
+ * load and every few seconds after, so this page never again just sits there
+ * showing "queued" forever with no way to tell if anything is wrong.
  */
 export function DiscountCallerConsole({
   cases,
-  calls,
+  calls: initialCalls,
 }: {
   cases: CallableCase[];
   calls: VoiceCallRow[];
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [calls, setCalls] = useState(initialCalls);
+  const [syncing, setSyncing] = useState(false);
 
   const calledCaseIds = new Set(calls.map((c) => c.caseId));
+  const hasPending = calls.some((c) => c.status === 'queued' || c.status === 'ringing' || c.status === 'in_progress');
+
+  const refreshCalls = useCallback(async () => {
+    const res = await fetch('/api/voice-agent/calls', { cache: 'no-store' });
+    if (!res.ok) return;
+    const json = (await res.json().catch(() => ({}))) as { ok?: boolean; calls?: VoiceCallRow[] };
+    if (json.ok && json.calls) setCalls(json.calls);
+  }, []);
+
+  const sync = useCallback(async () => {
+    setSyncing(true);
+    try {
+      await fetch('/api/voice-agent/sync', { method: 'POST' });
+      await refreshCalls();
+    } catch {
+      // A failed sync leaves the table showing whatever it last knew — not
+      // worse than before, and the button is right there to try again.
+    } finally {
+      setSyncing(false);
+    }
+  }, [refreshCalls]);
+
+  // Sync once on load, and keep polling every 8s for as long as anything is
+  // still in flight — the moment nothing is pending, this stops on its own.
+  useEffect(() => {
+    if (!hasPending) return;
+    void sync();
+    const id = setInterval(() => void sync(), 8000);
+    return () => clearInterval(id);
+  }, [hasPending, sync]);
 
   async function call(caseId: string) {
     setBusy(caseId);
@@ -34,7 +71,8 @@ export function DiscountCallerConsole({
         body: JSON.stringify({ caseId }),
       });
       const json = (await res.json().catch(() => ({}))) as { ok?: boolean; reason?: string };
-      setNotice(json.ok ? 'Call placed.' : (json.reason ?? `Could not place the call (HTTP ${res.status})`));
+      setNotice(json.ok ? 'Call placed — status below will update automatically.' : (json.reason ?? `Could not place the call (HTTP ${res.status})`));
+      await refreshCalls();
     } catch (e) {
       setNotice(e instanceof Error ? e.message : 'Request failed');
     } finally {
@@ -43,59 +81,136 @@ export function DiscountCallerConsole({
   }
 
   return (
-    <section className="card">
-      {notice && (
-        <div className="notice" style={{ margin: '12px 20px 0' }}>
-          <span>{notice}</span>
-        </div>
-      )}
+    <>
+      <section className="card">
+        {notice && (
+          <div className="notice" style={{ margin: '12px 20px 0' }}>
+            <span>{notice}</span>
+          </div>
+        )}
 
-      {cases.length === 0 ? (
-        <p className="subtle" style={{ padding: '16px 20px' }}>
-          No open cases with a phone number on file yet.
-        </p>
-      ) : (
-        <div className="table-wrap">
-          <table className="data">
-            <thead>
-              <tr>
-                <th className="num">Amount</th>
-                <th>Cause</th>
-                <th>Customer</th>
-                <th>Opened</th>
-                <th aria-label="Action" />
-              </tr>
-            </thead>
-            <tbody>
-              {cases.map((c) => (
-                <tr key={c.id}>
-                  <td className="num">{inr(c.amountPaise)}</td>
-                  <td>
-                    <div className="cell-main">{causeLabel(c.causeClass)}</div>
-                    <div className="cell-sub mono">{c.errorReason}</div>
-                  </td>
-                  <td>
-                    <div className="cell-main">{c.customerName ?? '—'}</div>
-                    <div className="cell-sub mono">{c.customerPhone}</div>
-                  </td>
-                  <td className="muted nowrap">{relativeTime(new Date(c.createdAt))}</td>
-                  <td className="row-action">
-                    <button
-                      type="button"
-                      className="btn-primary btn-sm"
-                      disabled={busy === c.id}
-                      onClick={() => void call(c.id)}
-                      title={calledCaseIds.has(c.id) ? 'A call has already been placed for this case' : undefined}
-                    >
-                      {busy === c.id ? 'Calling…' : calledCaseIds.has(c.id) ? 'Call again' : 'Call now'}
-                    </button>
-                  </td>
+        {cases.length === 0 ? (
+          <p className="subtle" style={{ padding: '16px 20px' }}>
+            No open cases with a phone number on file yet.
+          </p>
+        ) : (
+          <div className="table-wrap">
+            <table className="data">
+              <thead>
+                <tr>
+                  <th className="num">Amount</th>
+                  <th>Cause</th>
+                  <th>Customer</th>
+                  <th>Opened</th>
+                  <th aria-label="Action" />
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {cases.map((c) => (
+                  <tr key={c.id}>
+                    <td className="num">{inr(c.amountPaise)}</td>
+                    <td>
+                      <div className="cell-main">{causeLabel(c.causeClass)}</div>
+                      <div className="cell-sub mono">{c.errorReason}</div>
+                    </td>
+                    <td>
+                      <div className="cell-main">{c.customerName ?? '—'}</div>
+                      <div className="cell-sub mono">{c.customerPhone}</div>
+                    </td>
+                    <td className="muted nowrap">{relativeTime(new Date(c.createdAt))}</td>
+                    <td className="row-action">
+                      <button
+                        type="button"
+                        className="btn-primary btn-sm"
+                        disabled={busy === c.id}
+                        onClick={() => void call(c.id)}
+                        title={calledCaseIds.has(c.id) ? 'A call has already been placed for this case' : undefined}
+                      >
+                        {busy === c.id ? 'Calling…' : calledCaseIds.has(c.id) ? 'Call again' : 'Call now'}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <section className="card" style={{ marginTop: 20 }}>
+        <div className="panel-head">
+          <span className="panel-title">Call history</span>
+          <button type="button" className="btn-ghost" disabled={syncing} onClick={() => void sync()}>
+            {syncing ? 'Syncing…' : 'Sync status'}
+          </button>
         </div>
-      )}
-    </section>
+        {calls.length === 0 ? (
+          <p className="subtle" style={{ padding: '16px 20px' }}>
+            No calls placed yet.
+          </p>
+        ) : (
+          <div className="table-wrap">
+            <table className="data">
+              <thead>
+                <tr>
+                  <th>Phone</th>
+                  <th>Status</th>
+                  <th>Discount</th>
+                  <th>Link</th>
+                  <th>Paid</th>
+                  <th>Placed</th>
+                </tr>
+              </thead>
+              <tbody>
+                {calls.map((c) => (
+                  <tr key={c.id}>
+                    <td className="mono muted">{c.customerPhone}</td>
+                    <td>
+                      <StatusCell status={c.status} endedReason={c.endedReason} />
+                    </td>
+                    <td className="muted">
+                      {c.discountAmountPaise ? `${inr(c.discountAmountPaise)} (tier ${c.discountTierOffered})` : '—'}
+                    </td>
+                    <td>
+                      {c.paymentLinkUrl ? (
+                        <a href={c.paymentLinkUrl} target="_blank" rel="noreferrer" className="mono">
+                          {inr(c.paymentLinkAmountPaise ?? 0)}
+                        </a>
+                      ) : (
+                        '—'
+                      )}
+                    </td>
+                    <td>{c.paymentConfirmedAt ? 'Yes' : c.paymentLinkUrl ? 'Not yet' : '—'}</td>
+                    <td className="muted">{relativeTime(new Date(c.createdAt))}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+    </>
+  );
+}
+
+function StatusCell({ status, endedReason }: { status: string; endedReason: string | null }) {
+  const isFailure = status === 'failed' || (status === 'ended' && Boolean(endedReason));
+  return (
+    <span className="pill" title={endedReason ?? undefined}>
+      <span
+        className="dot"
+        style={{
+          background: isFailure
+            ? 'var(--critical)'
+            : status === 'ended'
+              ? 'var(--good)'
+              : status === 'queued'
+                ? 'var(--ink-muted)'
+                : 'var(--data)',
+        }}
+      />
+      {status.replace(/_/g, ' ')}
+      {isFailure && endedReason ? <span className="cell-sub"> · {endedReason}</span> : null}
+    </span>
   );
 }
