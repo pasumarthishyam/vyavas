@@ -223,9 +223,16 @@ async function handleCreatePaymentLink(db: Database, vapiCallId: string): Promis
     // referenceId is scoped to THIS voice call, not the bare case id.
     // Razorpay enforces uniqueness on reference_id per merchant — the case id
     // alone collides with the ladder's own link on the same case (or with a
-    // second call placed on the same case), and the 400 that produces was
+    // second call placed on the same case), and the 400 that produced was
     // read out to a real customer mid-call before this fix.
-    const referenceId = `${recoveryCase.id}:voice:${voiceCall.id}`;
+    //
+    // The voice call's own id, alone — not prefixed with the case id too.
+    // Razorpay also caps reference_id at 40 characters; a UUID is exactly 36,
+    // so it fits with room to spare, while `${caseId}:voice:${voiceCall.id}`
+    // was 79 and failed the same way on every single call, discount or not.
+    // Traceability back to the case doesn't need it in the reference_id
+    // anyway — it's already in `notes.vyavas_case_id` below.
+    const referenceId = voiceCall.id;
 
     const link = await createPaymentLink(razorpay, {
       amountPaise,

@@ -42,32 +42,16 @@ export default async function DiscountCallerPage() {
         </div>
       </div>
 
-      {!voiceAgentEnabled() && (
-        <div className="notice">
-          <span>
-            <strong style={{ fontWeight: 550 }}>VOICE_AGENT_ENABLED is off.</strong> Every "Call now"
-            button below will refuse until it's set to <span className="mono">true</span>.
-          </span>
-        </div>
-      )}
-
       <div className="notice">
         <span>
-          Calls are hard-limited to the numbers in{' '}
+          <strong style={{ fontWeight: 550 }}>Web call</strong> talks to the agent through your
+          browser's own microphone — no phone, no telephony carrier, no number to dial. The
+          real-phone-call path still exists on the backend ({' '}
+          <span className="mono">VOICE_AGENT_ENABLED</span>, currently{' '}
+          <span className="mono">{voiceAgentEnabled() ? 'true' : 'false'}</span>, and{' '}
           <span className="mono">VOICE_AGENT_ALLOWED_TEST_NUMBERS</span>
-          {allowedTestNumbers().length > 0 ? (
-            <>
-              {' '}
-              — currently:{' '}
-              {allowedTestNumbers().map((n) => (
-                <span key={n} className="mono">
-                  {n}{' '}
-                </span>
-              ))}
-            </>
-          ) : (
-            <> — none configured, so no call can be placed yet.</>
-          )}
+          {allowedTestNumbers().length > 0 ? ` (${allowedTestNumbers().join(', ')})` : ' (none set)'})
+          {' '}but isn't wired to a button here right now.
         </span>
       </div>
 

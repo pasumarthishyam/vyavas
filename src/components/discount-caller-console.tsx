@@ -36,14 +36,12 @@ export function DiscountCallerConsole({
   cases: CallableCase[];
   calls: VoiceCallRow[];
 }) {
-  const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [calls, setCalls] = useState(initialCalls);
   const [syncing, setSyncing] = useState(false);
   const [webCall, setWebCall] = useState<{ caseId: string; state: WebCallState } | null>(null);
   const vapiRef = useRef<InstanceType<typeof Vapi> | null>(null);
 
-  const calledCaseIds = new Set(calls.map((c) => c.caseId));
   const hasPending = calls.some((c) => c.status === 'queued' || c.status === 'ringing' || c.status === 'in_progress');
 
   const refreshCalls = useCallback(async () => {
@@ -74,25 +72,6 @@ export function DiscountCallerConsole({
     const id = setInterval(() => void sync(), 8000);
     return () => clearInterval(id);
   }, [hasPending, sync]);
-
-  async function call(caseId: string) {
-    setBusy(caseId);
-    setNotice(null);
-    try {
-      const res = await fetch('/api/voice-agent/calls', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ caseId }),
-      });
-      const json = (await res.json().catch(() => ({}))) as { ok?: boolean; reason?: string };
-      setNotice(json.ok ? 'Call placed — status below will update automatically.' : (json.reason ?? `Could not place the call (HTTP ${res.status})`));
-      await refreshCalls();
-    } catch (e) {
-      setNotice(e instanceof Error ? e.message : 'Request failed');
-    } finally {
-      setBusy(null);
-    }
-  }
 
   /**
    * A call over the browser's own microphone — WebRTC to Vapi directly, no
@@ -245,24 +224,15 @@ export function DiscountCallerConsole({
                       <div className="cell-sub mono">{c.customerPhone}</div>
                     </td>
                     <td className="muted nowrap">{relativeTime(new Date(c.createdAt))}</td>
-                    <td className="row-action" style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-                      <button
-                        type="button"
-                        className="btn-ghost btn-sm"
-                        disabled={webCall !== null}
-                        onClick={() => void startWebCall(c.id)}
-                        title="Talk to the agent through your browser's microphone — no phone, no carrier, no cost beyond Vapi's own credit."
-                      >
-                        Web call
-                      </button>
+                    <td className="row-action">
                       <button
                         type="button"
                         className="btn-primary btn-sm"
-                        disabled={busy === c.id}
-                        onClick={() => void call(c.id)}
-                        title={calledCaseIds.has(c.id) ? 'A call has already been placed for this case' : undefined}
+                        disabled={webCall !== null}
+                        onClick={() => void startWebCall(c.id)}
+                        title="Talk to the agent through your browser's microphone — no phone, no carrier involved."
                       >
-                        {busy === c.id ? 'Calling…' : calledCaseIds.has(c.id) ? 'Call again' : 'Call now'}
+                        Web call
                       </button>
                     </td>
                   </tr>
