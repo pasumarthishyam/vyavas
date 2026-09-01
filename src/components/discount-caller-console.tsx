@@ -140,9 +140,15 @@ export function DiscountCallerConsole({
       void refreshCalls();
     });
     vapi.on('error', (e: unknown) => {
-      setNotice(e instanceof Error ? e.message : 'Web call error');
-      setWebCall(null);
+      // Tear the session down for real, not just the UI's idea of it — an
+      // error event on an already-active call must never leave audio running
+      // with no control left on screen to stop it. That's the exact bug this
+      // replaced: the banner (and its Hang Up button) vanished on error while
+      // the underlying WebRTC session kept running.
+      vapi.stop();
       vapiRef.current = null;
+      setNotice(`Web call error: ${e instanceof Error ? e.message : String(e)}`);
+      setWebCall({ caseId, state: 'ended' });
     });
 
     try {
@@ -153,27 +159,46 @@ export function DiscountCallerConsole({
       const started = await vapi.start(assistantId, { metadata: { caseId } } as never);
       await registerOnce(extractCallId(started));
     } catch (e) {
-      setNotice(e instanceof Error ? e.message : 'Could not start the web call');
-      setWebCall(null);
+      vapi.stop();
       vapiRef.current = null;
+      setNotice(e instanceof Error ? e.message : 'Could not start the web call');
+      setWebCall({ caseId, state: 'ended' });
     }
   }
 
+  /** Always reachable, whatever state the UI thinks the call is in — belt and braces against exactly the "nothing on screen can stop it" failure above. */
   function stopWebCall() {
     vapiRef.current?.stop();
+    vapiRef.current = null;
+    setWebCall((w) => (w ? { ...w, state: 'ended' } : w));
   }
 
   return (
     <>
       {webCall && (
-        <div className="notice" style={{ marginBottom: 12 }}>
+        <div
+          className="notice"
+          style={{
+            marginBottom: 12,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 12,
+            border: webCall.state !== 'ended' ? '1px solid var(--data)' : undefined,
+          }}
+        >
           <span>
             {webCall.state === 'connecting' && 'Connecting the web call — allow microphone access if prompted…'}
-            {webCall.state === 'active' && 'Web call is live — talk into your microphone. '}
-            {webCall.state === 'ended' && 'Web call ended. '}
+            {webCall.state === 'active' && 'Web call is live — talk into your microphone.'}
+            {webCall.state === 'ended' && 'Web call ended.'}
           </span>
           {webCall.state !== 'ended' ? (
-            <button type="button" className="btn-ghost" onClick={stopWebCall}>
+            <button
+              type="button"
+              className="btn-primary btn-sm"
+              style={{ background: 'var(--critical)', flexShrink: 0 }}
+              onClick={stopWebCall}
+            >
               Hang up
             </button>
           ) : (
