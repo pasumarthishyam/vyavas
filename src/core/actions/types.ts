@@ -53,6 +53,13 @@ export const MESSAGE_INTENTS = [
    * same as every other intent here.
    */
   'call_follow_up',
+  /**
+   * The abandoned-cart agent's own follow-up — the ONE intent in this set that
+   * names its discount outright. It is never sent on WhatsApp (the agent only
+   * ever calls `sendMessage` with `channel: 'email'`), so the UTILITY/MARKETING
+   * category line the other templates are careful about does not apply to it.
+   */
+  'cart_abandoned_discount',
 ] as const;
 export type MessageIntent = (typeof MESSAGE_INTENTS)[number];
 

@@ -216,6 +216,7 @@ export function emailSubject(intent: MessageIntent, merchantName: string): strin
     invoice_due: `Invoice from ${merchantName} is due`,
     bank_action_required: `Your bank blocked the card for your ${merchantName} order`,
     call_follow_up: `Your payment link from ${merchantName}`,
+    cart_abandoned_discount: `Rs 200 off — finish your ${merchantName} order`,
   };
   return subjects[intent];
 }

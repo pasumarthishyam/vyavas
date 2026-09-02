@@ -103,6 +103,18 @@ export const merchants = pgTable(
     resendApiKeyEnc: text('resend_api_key_enc'),
     emailFrom: text('email_from'),
 
+    /**
+     * The key a MERCHANT'S OWN application presents to call the abandoned-cart
+     * webhook — the direction of trust is reversed from every other credential
+     * on this table, which are ours to call a provider. This one is ours to
+     * verify a caller. Stored encrypted and reversible (not hashed) on purpose:
+     * the integration box on `/agents/abandoned-cart` shows it back in plain
+     * text every time the page loads, because a merchant wiring up a webhook
+     * needs to copy it more than once and a "shown only at creation" flow would
+     * mean losing it is unrecoverable rather than a one-click regenerate.
+     */
+    abandonedCartApiKeyEnc: text('abandoned_cart_api_key_enc'),
+
     // ── where messages ACTUALLY land ──
     //
     // NULL means the real recipient. Set means every message on that channel

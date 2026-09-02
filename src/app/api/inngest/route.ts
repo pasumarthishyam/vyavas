@@ -3,6 +3,7 @@ import { serve } from 'inngest/next';
 import { inngest } from '../../../workflows/client';
 import { runLadder } from '../../../workflows/functions/run-ladder';
 import { sweepDeadlines } from '../../../workflows/functions/sweep-deadlines';
+import { sweepAbandonedCarts } from '../../../workflows/functions/sweep-abandoned-carts';
 
 /**
  * The Inngest endpoint.
@@ -42,7 +43,7 @@ const origin = process.env.APP_URL ?? 'https://www.vyavas.com';
 
 export const { GET, POST, PUT } = serve({
   client: inngest,
-  functions: [runLadder, sweepDeadlines],
+  functions: [runLadder, sweepDeadlines, sweepAbandonedCarts],
   serveOrigin: origin,
   servePath: '/api/inngest',
 });

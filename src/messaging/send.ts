@@ -48,7 +48,8 @@ export interface SendInput {
   db: Database;
   merchantId: string;
   customerId: string;
-  caseId: string;
+  /** Null for a touch that has no case at all — the abandoned-cart agent. */
+  caseId: string | null;
   rung: number;
   channel: Channel;
   message: ComposedMessage;

@@ -65,7 +65,8 @@
       "WebFetch(domain:github.com)",
       "Bash(npm audit *)",
       "Bash(echo \"TSC_EXIT=$?\")",
-      "Bash(echo \"ESLINT_EXIT=$?\")"
+      "Bash(echo \"ESLINT_EXIT=$?\")",
+      "Bash(npx tsx -e ' *)"
     ]
   }
 }

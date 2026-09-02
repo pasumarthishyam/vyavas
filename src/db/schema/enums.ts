@@ -79,3 +79,11 @@ export const voiceCallStatusEnum = pgEnum('voice_call_status', [
   'ended',
   'failed',
 ]);
+
+export const abandonedCartStatusEnum = pgEnum('abandoned_cart_status', [
+  'detected',
+  'emailed',
+  'recovered',
+  'expired',
+  'failed',
+]);

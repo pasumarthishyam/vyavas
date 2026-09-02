@@ -50,6 +50,13 @@
       "when": 1788212896844,
       "tag": "0006_modern_ultragirl",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1788280243930,
+      "tag": "0007_spicy_jack_power",
+      "breakpoints": true
     }
   ]
 }

@@ -219,6 +219,24 @@ export const TEMPLATES: readonly TemplateDefinition[] = [
       'never the word "discount" — for the same reason every other template here avoids it: it is ' +
       'what keeps this in the UTILITY category rather than MARKETING.',
   }),
+  T({
+    name: 'vyavas_cart_abandoned_en',
+    intent: 'cart_abandoned_discount',
+    category: 'UTILITY',
+    language: 'en',
+    body:
+      "Hi {{1}}, we noticed you didn't finish checking out with {{3}}.\n\n" +
+      "If something got in the way, we'd like to help — here's Rs 200 off to make it easier: " +
+      'pay just {{2}} using this link: {{4}}\n\n' +
+      "This link is live for the next 24 hours, and there's no obligation if you've changed your mind.",
+    variables: ['customer_name', 'amount', 'merchant_name', 'payment_link'],
+    examples: ['Rahul', 'Rs 1,643', 'Kirana Cloud', 'https://rzp.io/i/example'],
+    rationale:
+      'Email-only by construction — the webhook handler never passes this to a WhatsApp send, so ' +
+      "the discount can be named plainly, unlike every other template in this file. {{2}} is the " +
+      'ALREADY-DISCOUNTED amount, not the original cart total, so the number in the message is ' +
+      'exactly what the link charges — nothing for the customer to reconcile themselves.',
+  }),
 ];
 
 // ─── lookup ──────────────────────────────────────────────────────────────────

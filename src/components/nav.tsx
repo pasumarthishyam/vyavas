@@ -9,6 +9,7 @@ const ITEMS = [
   { href: '/recovery', label: 'Failed Payment Agent', icon: RecoveryIcon },
   { href: '/cases', label: 'Cases', icon: CasesIcon },
   { href: '/agents/discount-caller', label: 'Discount Caller', icon: PhoneIcon },
+  { href: '/agents/abandoned-cart', label: 'Abandoned Cart Agent', icon: CartIcon },
 ];
 
 export function Nav({ switcher }: { switcher?: React.ReactNode }) {
@@ -183,6 +184,22 @@ function PhoneIcon() {
         strokeWidth="1.4"
         strokeLinejoin="round"
       />
+    </svg>
+  );
+}
+
+function CartIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path
+        d="M1.8 2h1.4l1 8.2a1.4 1.4 0 0 0 1.4 1.2h5.6a1.4 1.4 0 0 0 1.4-1.1l1-5.4H4.1"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <circle cx="6.2" cy="14" r="1" fill="currentColor" />
+      <circle cx="11" cy="14" r="1" fill="currentColor" />
     </svg>
   );
 }
