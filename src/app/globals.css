@@ -674,6 +674,83 @@ h2 {
   margin-top: 36px;
 }
 
+/* ─── main content + a fixed-width aside, side by side ───────────────────────
+   Used to put a small "copy these values" card next to the metrics that
+   actually matter, rather than at the top of the page competing with them. */
+.with-aside {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 20px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .with-aside {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ─── abandoned-cart "connect your app" card ─────────────────────────────── */
+
+.connect-card {
+  padding: 0;
+  position: sticky;
+  top: 20px;
+}
+
+.connect-card .panel-head {
+  border-bottom: 1px solid var(--hairline);
+}
+
+.connect-body {
+  padding: 14px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.connect-field {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--hairline);
+  font-size: 11.5px;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.connect-confirm {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--data-soft);
+  font-size: 12px;
+}
+
+.connect-code {
+  margin: 0;
+  padding: 10px 34px 10px 10px;
+  border-radius: 8px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--hairline);
+  font-size: 11px;
+  line-height: 1.5;
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre;
+}
+
+.connect-code-copy {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+}
+
 /* ─── stat tile ───────────────────────────────────────────────────────────── */
 
 .stat {

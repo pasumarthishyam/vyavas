@@ -1,11 +1,12 @@
 /**
  * The abandoned-cart agent's actual work: discount, payment link, email.
  *
- * Shared by the real webhook (`app/api/abandoned-cart/[slug]/webhook`) and the
- * dashboard's "Send test email" action (`app/api/abandoned-cart/test-send`) —
- * deliberately the same function, not two similar ones. A test send that
- * exercised a different code path would tell a merchant nothing about whether
- * the real one works.
+ * Pulled out of `app/api/abandoned-cart/[slug]/webhook/route.ts` so the
+ * webhook's own auth/idempotency/status branching stays readable and this
+ * stays independently testable. Also briefly shared with a dashboard
+ * "Send test email" action while the feature was being built and verified
+ * end-to-end; that action has since been removed, but the separation was
+ * worth keeping.
  */
 
 import type { Database } from '../db/client.js';
