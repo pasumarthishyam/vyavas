@@ -2,8 +2,8 @@ import { getDb } from '../../../db/client';
 import { selectMerchant } from '../../../lib/merchant-context';
 import { getMerchant } from '../../../db/queries/dashboard';
 import { getCallableCases, getRecentVoiceCallRows } from '../../../db/queries/voice-agent';
-import { allowedTestNumbers, voiceAgentEnabled } from '../../../lib/env';
 import { Empty } from '../../../components/charts';
+import { Stat, inr } from '../../../components/ui';
 import { DiscountCallerConsole } from '../../../components/discount-caller-console';
 
 export const dynamic = 'force-dynamic';
@@ -33,26 +33,42 @@ export default async function DiscountCallerPage() {
     getRecentVoiceCallRows(db, merchant.id, 50),
   ]);
 
+  const callableAtRisk = cases.reduce((sum, c) => sum + c.amountPaise, 0);
+  const inFlight = calls.filter(
+    (c) => c.status === 'queued' || c.status === 'ringing' || c.status === 'in_progress',
+  ).length;
+  const linked = calls.filter((c) => c.paymentLinkUrl != null).length;
+  const paid = calls.filter((c) => c.paymentConfirmedAt != null);
+  const paidCount = paid.length;
+  const paidPaise = paid.reduce((sum, c) => sum + (c.paymentLinkAmountPaise ?? 0), 0);
+
   return (
     <>
       <div className="page-head">
         <div>
           <div className="eyebrow">{merchant.name}</div>
-          <h1>Discount Caller</h1>
+          <h1>Discount Caller Agent</h1>
         </div>
       </div>
 
-      <div className="notice">
-        <span>
-          <strong style={{ fontWeight: 550 }}>Web call</strong> talks to the agent through your
-          browser's own microphone — no phone, no telephony carrier, no number to dial. The
-          real-phone-call path still exists on the backend ({' '}
-          <span className="mono">VOICE_AGENT_ENABLED</span>, currently{' '}
-          <span className="mono">{voiceAgentEnabled() ? 'true' : 'false'}</span>, and{' '}
-          <span className="mono">VOICE_AGENT_ALLOWED_TEST_NUMBERS</span>
-          {allowedTestNumbers().length > 0 ? ` (${allowedTestNumbers().join(', ')})` : ' (none set)'})
-          {' '}but isn't wired to a button here right now.
-        </span>
+      {/* Metrics before the lists, the same way every other agent page reads:
+          what is available to call, and what calling has actually produced. */}
+      <div className="grid grid-3" style={{ marginBottom: 20 }}>
+        <Stat
+          label="Callable now"
+          value={inr(callableAtRisk)}
+          foot={`${cases.length} case${cases.length === 1 ? '' : 's'} with a number on file`}
+        />
+        <Stat
+          label="Calls placed"
+          value={String(calls.length)}
+          foot={inFlight > 0 ? `${inFlight} still in flight` : 'none in flight'}
+        />
+        <Stat
+          label="Paid after a call"
+          value={inr(paidPaise)}
+          foot={`${paidCount} of ${linked} link${linked === 1 ? '' : 's'} sent`}
+        />
       </div>
 
       <DiscountCallerConsole cases={cases} calls={calls} />

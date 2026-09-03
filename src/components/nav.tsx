@@ -4,12 +4,31 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
 
-const ITEMS = [
-  { href: '/', label: 'Overview', icon: OverviewIcon },
-  { href: '/recovery', label: 'Failed Payment Agent', icon: RecoveryIcon },
-  { href: '/cases', label: 'Cases', icon: CasesIcon },
-  { href: '/agents/discount-caller', label: 'Discount Caller', icon: PhoneIcon },
-  { href: '/agents/abandoned-cart', label: 'Abandoned Cart Agent', icon: CartIcon },
+/*
+ * The rail, in the order the work happens: the summary, then every agent, then
+ * the ledger the agents write into.
+ *
+ * Cases sits last on purpose. It is not an agent — it is the record of what all
+ * three of them did — and having it wedged between two agents made the group
+ * read as four peers rather than three agents and their output.
+ */
+const GROUPS: { label: string | null; items: { href: string; label: string; icon: () => React.ReactElement }[] }[] = [
+  {
+    label: null,
+    items: [{ href: '/', label: 'Overview', icon: OverviewIcon }],
+  },
+  {
+    label: 'Agents',
+    items: [
+      { href: '/recovery', label: 'Failed Payment Agent', icon: RecoveryIcon },
+      { href: '/agents/discount-caller', label: 'Discount Caller Agent', icon: PhoneIcon },
+      { href: '/agents/abandoned-cart', label: 'Abandoned Cart Agent', icon: CartIcon },
+    ],
+  },
+  {
+    label: 'Record',
+    items: [{ href: '/cases', label: 'Cases', icon: CasesIcon }],
+  },
 ];
 
 export function Nav({ switcher }: { switcher?: React.ReactNode }) {
@@ -55,34 +74,41 @@ export function Nav({ switcher }: { switcher?: React.ReactNode }) {
       {switcher && <div className="sidebar-switcher">{switcher}</div>}
 
       <nav className="nav">
-        {ITEMS.map((item) => {
-          // usePathname() can render null on the first pass of a cold, dynamic
-          // page — guard rather than crash the whole shell over an active-tab
-          // highlight.
-          const active = item.href === '/' ? pathname === '/' : (pathname ?? '').startsWith(item.href);
-          const Icon = item.icon;
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              className="nav-item"
-              aria-current={active ? 'page' : undefined}
-              title={isCollapsed ? item.label : undefined}
-            >
-              <span className="nav-item-icon">
-                <Icon />
-              </span>
-              <span className="nav-item-label">{item.label}</span>
-            </Link>
-          );
-        })}
+        {GROUPS.map((group, gi) => (
+          <div key={group.label ?? `group-${gi}`}>
+            {group.label && (
+              <div className="nav-section" aria-hidden={isCollapsed}>
+                {group.label}
+              </div>
+            )}
+            {group.items.map((item) => {
+              // usePathname() can render null on the first pass of a cold,
+              // dynamic page — guard rather than crash the whole shell over an
+              // active-tab highlight.
+              const active =
+                item.href === '/' ? pathname === '/' : (pathname ?? '').startsWith(item.href);
+              const Icon = item.icon;
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className="nav-item"
+                  aria-current={active ? 'page' : undefined}
+                  title={isCollapsed ? item.label : undefined}
+                >
+                  <span className="nav-item-icon">
+                    <Icon />
+                  </span>
+                  <span className="nav-item-label">{item.label}</span>
+                </Link>
+              );
+            })}
+          </div>
+        ))}
       </nav>
 
       <div className="sidebar-foot">
         <ThemeToggle collapsed={isCollapsed} />
-        <div className="sidebar-note">
-          Every send is gated, logged and reversible.
-        </div>
       </div>
     </aside>
   );
@@ -116,8 +142,9 @@ function ThemeToggle({ collapsed }: { collapsed: boolean }) {
   }
 
   // Render nothing until the real theme is known, so the label never flips
-  // after hydration.
-  if (theme === null) return <div style={{ height: 18 }} />;
+  // after hydration — but reserve the button's exact box, so the sidebar foot
+  // does not move when it arrives.
+  if (theme === null) return <div className="theme-toggle-placeholder" aria-hidden="true" />;
 
   return (
     <button

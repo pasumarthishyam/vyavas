@@ -66,7 +66,11 @@
       "Bash(npm audit *)",
       "Bash(echo \"TSC_EXIT=$?\")",
       "Bash(echo \"ESLINT_EXIT=$?\")",
-      "Bash(npx tsx -e ' *)"
+      "Bash(npx tsx -e ' *)",
+      "PowerShell(npx tsc --noEmit -p tsconfig.json 2>&1)",
+      "PowerShell(npx next build --no-lint 2>&1)",
+      "PowerShell(npx eslint src --max-warnings=0 2>&1)",
+      "Bash(npm test *)"
     ]
   }
 }

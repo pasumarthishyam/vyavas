@@ -136,6 +136,24 @@ export default async function RecoveryPage() {
     <RecoveryConsole
       initial={{
         merchant,
+        /*
+         * Routing ships with the FIRST paint, not with the first poll.
+         *
+         * This was the page's worst layout shift and the reason it appeared to
+         * "adjust itself" a couple of seconds after opening: the server render
+         * omitted `routing`, so `<Routing>` rendered nothing; the poll at
+         * POLL_MS came back with it, a full-width banner appeared out of
+         * nowhere, and every panel below — the queue, the case table, activity
+         * — jumped down by its height. The merchant row already carries these
+         * three columns, so there was never a reason to wait for the network.
+         */
+        routing: merchant
+          ? {
+              whatsappRedirectTo: merchant.whatsappRedirectTo,
+              emailRedirectTo: merchant.emailRedirectTo,
+              emailFrom: merchant.emailFrom,
+            }
+          : undefined,
         cases,
         activity,
         summary,

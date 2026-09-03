@@ -4,6 +4,7 @@ import { getDb } from '../../db/client';
 import { selectMerchant } from '../../lib/merchant-context';
 import { getCauseClassBreakdown, getMerchant, getRecentCases } from '../../db/queries/dashboard';
 import { Empty } from '../../components/charts';
+import { CasesLegend } from '../../components/cases-legend';
 import { StatePill, causeLabel, inr, relativeTime } from '../../components/ui';
 import type { CaseState } from '../../core/case/types';
 import { resolveDateRange } from '../../lib/date-range';
@@ -112,9 +113,12 @@ export default async function CasesPage({
           body="No cases match this filter. Try widening it, or check back once more failures arrive."
         />
       ) : (
-        <div className="card">
-          <div className="table-wrap">
-            <table className="data">
+        <div className="panel">
+          {/* Capped and scrolled inside itself: 200 cases is a normal filter
+              result here, and letting the page grow to fit them all is what
+              made this view feel unbounded. */}
+          <div className="table-wrap panel-scroll">
+            <table className="data data-cases">
               <thead>
                 <tr>
                   <th>Cause</th>
@@ -157,11 +161,10 @@ export default async function CasesPage({
         </div>
       )}
 
-      <p className="subtle" style={{ marginTop: 20, fontSize: 12.5 }}>
-        <strong style={{ fontWeight: 550 }}>Holdout</strong> cases run the whole workflow and log
-        every action they would have taken, but send nothing. The gap between the two groups is the
-        only honest measure of what recovery is worth.
-      </p>
+      {/* The vocabulary lives in the docked key, bottom-right — a reference to
+          open when a word is unfamiliar, rather than a paragraph everyone
+          scrolls past exactly once. */}
+      <CasesLegend />
     </>
   );
 }

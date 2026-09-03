@@ -47,20 +47,30 @@ export function AbandonedCartConsole({ carts: initialCarts }: { carts: Abandoned
   }, [hasPending, sync]);
 
   return (
-    <div className="card" style={{ padding: 0 }}>
-      <div className="panel-head">
-        <span className="panel-title">Cart activity</span>
-        <button type="button" className="btn-ghost" disabled={syncing} onClick={() => void sync()}>
+    <section className="panel">
+      <div className="panel-head panel-head-ruled">
+        <span className="panel-title">
+          Cart activity
+          {carts.length > 0 && <span className="count-badge">{carts.length}</span>}
+        </span>
+        <button
+          type="button"
+          className="refresh"
+          disabled={syncing}
+          onClick={() => void sync()}
+          title="Ask the payment provider for the current status of every open link"
+        >
           {syncing ? 'Syncing…' : 'Sync status'}
         </button>
       </div>
       {carts.length === 0 ? (
-        <p className="subtle" style={{ padding: '16px 20px' }}>
-          No abandoned carts reported yet — once your application calls the webhook, they&apos;ll show up here.
+        <p className="panel-empty">
+          No abandoned carts reported yet — once your application calls the webhook, they&apos;ll
+          show up here.
         </p>
       ) : (
-        <div className="table-wrap">
-          <table className="data">
+        <div className="table-wrap panel-scroll">
+          <table className="data data-cases">
             <thead>
               <tr>
                 <th className="num">Amount</th>
@@ -74,7 +84,7 @@ export function AbandonedCartConsole({ carts: initialCarts }: { carts: Abandoned
             <tbody>
               {carts.map((c) => (
                 <tr key={c.id}>
-                  <td className="num">{inr(c.amountPaise)}</td>
+                  <td className="num amount-cell">{inr(c.amountPaise)}</td>
                   <td>
                     <StatusCell status={c.status} reason={c.failureReason} />
                   </td>
@@ -99,7 +109,7 @@ export function AbandonedCartConsole({ carts: initialCarts }: { carts: Abandoned
           </table>
         </div>
       )}
-    </div>
+    </section>
   );
 }
 

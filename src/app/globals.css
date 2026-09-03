@@ -74,14 +74,22 @@
   --serious: #ec835a;
   --critical: #d03b3b;
 
-  --radius: 14px;
+  --radius: 12px;
   --radius-sm: 8px;
+  --radius-lg: 16px;
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
 
-  --sidebar-w: 240px;
+  /* One duration scale. Everything that moves picks one of these three, so no
+     two transitions in the same view run at visibly different speeds. */
+  --t-fast: 110ms;
+  --t-base: 160ms;
+  --t-slow: 240ms;
+
+  --sidebar-w: 244px;
   --sidebar-w-collapsed: 68px;
   --shadow-sm: 0 1px 2px rgba(11, 11, 11, 0.04), 0 1px 1px rgba(11, 11, 11, 0.03);
   --shadow-md: 0 4px 16px rgba(11, 11, 11, 0.06), 0 1px 2px rgba(11, 11, 11, 0.04);
+  --shadow-lg: 0 16px 48px rgba(11, 11, 11, 0.12), 0 2px 8px rgba(11, 11, 11, 0.06);
 }
 
 :root[data-sidebar='collapsed'] {
@@ -92,12 +100,14 @@
   :root:not([data-theme='light']) {
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.18), 0 1px 1px rgba(0, 0, 0, 0.14);
     --shadow-md: 0 4px 20px rgba(0, 0, 0, 0.32), 0 1px 2px rgba(0, 0, 0, 0.2);
+    --shadow-lg: 0 18px 56px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3);
   }
 }
 
 :root[data-theme='dark'] {
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.18), 0 1px 1px rgba(0, 0, 0, 0.14);
   --shadow-md: 0 4px 20px rgba(0, 0, 0, 0.32), 0 1px 2px rgba(0, 0, 0, 0.2);
+  --shadow-lg: 0 18px 56px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -190,8 +200,22 @@
   margin: 0;
 }
 
+/*
+ * `scrollbar-gutter: stable` is load-bearing, not cosmetic.
+ *
+ * These pages start short and grow the moment the first poll lands. Without a
+ * reserved gutter the scrollbar appears at that instant, the viewport narrows
+ * by ~15px, and EVERY centred element on the page slides sideways — which is
+ * most of what "the layout adjusts two seconds after opening" actually was.
+ * Reserving the gutter up front means the page is the same width before and
+ * after, whatever arrives later.
+ */
 html {
   -webkit-text-size-adjust: 100%;
+  scrollbar-gutter: stable;
+  /* Nothing in this product is meant to scroll sideways at the document level;
+     anything wide scrolls inside its own container instead. */
+  overflow-x: hidden;
 }
 
 body {
@@ -203,6 +227,8 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   letter-spacing: -0.006em;
+  /* A short page and a long page must not differ in width. */
+  min-height: 100vh;
 }
 
 a {
@@ -237,8 +263,8 @@ svg {
 .shell {
   min-height: 100vh;
   display: grid;
-  grid-template-columns: var(--sidebar-w) 1fr;
-  transition: grid-template-columns 0.22s var(--ease);
+  grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+  transition: grid-template-columns var(--t-base) var(--ease);
 }
 
 @media (max-width: 900px) {
@@ -249,15 +275,14 @@ svg {
 
 .sidebar {
   border-right: 1px solid var(--hairline);
-  padding: 20px 14px 18px;
+  padding: 18px 14px 16px;
   position: sticky;
   top: 0;
   height: 100vh;
   display: flex;
   flex-direction: column;
-  gap: 22px;
-  background: var(--surface);
-  box-shadow: var(--shadow-sm);
+  gap: 18px;
+  background: var(--surface-sunken);
   overflow: hidden;
 }
 
@@ -360,12 +385,39 @@ svg {
 .nav {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
+  /* The rail is the only part of the sidebar allowed to scroll — the brand,
+     the account switcher and the theme toggle stay pinned whatever happens. */
+  overflow-y: auto;
+  min-height: 0;
+  margin-inline: -4px;
+  padding-inline: 4px;
+}
+
+/* One group of rail items. Carries the same 1px rhythm as the rail itself, so
+   a grouped list and a flat one are indistinguishable apart from the label. */
+.nav > div {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
 }
 
 @media (max-width: 900px) {
   .nav {
     flex-direction: row;
+    overflow-x: auto;
+    overflow-y: visible;
+  }
+
+  /* The sidebar is a horizontal bar here, so the group wrappers dissolve and
+     their items join the row directly rather than stacking into three
+     columns. */
+  .nav > div {
+    display: contents;
+  }
+
+  .nav-section {
+    display: none;
   }
 }
 
@@ -373,13 +425,13 @@ svg {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 10px;
+  padding: 7px 10px;
   border-radius: var(--radius-sm);
   color: var(--ink-secondary);
   font-size: 13.5px;
   font-weight: 480;
   position: relative;
-  transition: background 0.14s var(--ease), color 0.14s var(--ease);
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 }
 
 .nav-item-icon {
@@ -410,36 +462,45 @@ svg {
   color: var(--ink);
 }
 
+/*
+ * Active: a raised surface, not a coloured wash.
+ *
+ * The blue fill it replaced put the loudest colour in the product on a piece of
+ * chrome, so the sidebar competed with the money on the page. A lifted tile plus
+ * full-strength ink says "you are here" without spending the accent.
+ */
 .nav-item[aria-current='page'] {
-  background: var(--data-soft);
-  color: var(--data);
+  background: var(--surface);
+  color: var(--ink);
   font-weight: 560;
+  box-shadow: var(--shadow-sm), inset 0 0 0 1px var(--hairline);
 }
 
-/* Active rail: the accent the flat text link was missing. */
-.nav-item[aria-current='page']::before {
-  content: '';
-  position: absolute;
-  left: -14px;
-  top: 6px;
-  bottom: 6px;
-  width: 3px;
-  border-radius: 0 3px 3px 0;
-  background: var(--data);
+.nav-item[aria-current='page'] .nav-item-icon {
+  color: var(--data);
 }
 
 .nav-section {
-  font-size: 11px;
-  font-weight: 560;
-  letter-spacing: 0.055em;
+  font-size: 10.5px;
+  font-weight: 570;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--ink-muted);
-  padding: 0 10px 8px;
+  padding: 14px 10px 6px;
+}
+
+/* At 68px there is no room for a word, so the label becomes a divider — the
+   grouping survives the collapse even though its name does not. */
+:root[data-sidebar='collapsed'] .nav-section {
+  font-size: 0;
+  padding: 10px 8px;
+  border-top: 1px solid var(--hairline);
+  margin-top: 4px;
 }
 
 .sidebar-foot {
   margin-top: auto;
-  padding-top: 14px;
+  padding-top: 12px;
   border-top: 1px solid var(--hairline);
   display: flex;
   flex-direction: column;
@@ -452,16 +513,26 @@ svg {
   }
 }
 
-.theme-toggle {
+/*
+ * Fixed height, and the placeholder below matches it exactly.
+ *
+ * The real theme is only knowable on the client, so this button renders empty
+ * for one frame. When the empty state was 18px tall and the button 34px, that
+ * one frame moved the whole sidebar foot — a small shift, but on the same load
+ * as every other shift this pass removes.
+ */
+.theme-toggle,
+.theme-toggle-placeholder {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 10px;
+  height: 34px;
+  padding: 0 10px;
   border-radius: var(--radius-sm);
   font-size: 13px;
   font-weight: 480;
   color: var(--ink-secondary);
-  transition: background 0.14s var(--ease), color 0.14s var(--ease);
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 }
 
 .theme-toggle:hover {
@@ -469,26 +540,17 @@ svg {
   color: var(--ink);
 }
 
-:root[data-sidebar='collapsed'] .theme-toggle {
+:root[data-sidebar='collapsed'] .theme-toggle,
+:root[data-sidebar='collapsed'] .theme-toggle-placeholder {
   justify-content: center;
-  padding: 8px;
-}
-
-.sidebar-note {
-  font-size: 11.5px;
-  color: var(--ink-muted);
-  line-height: 1.55;
-  padding: 0 10px;
-}
-
-:root[data-sidebar='collapsed'] .sidebar-note {
-  display: none;
+  padding: 0;
 }
 
 .main {
   min-width: 0;
-  padding: 40px 44px 88px;
-  max-width: 1180px;
+  width: 100%;
+  padding: 36px 40px 96px;
+  max-width: 1200px;
   /*
    * Centered rather than left-hugging: when the sidebar collapses (or on a
    * wide monitor), the grid column is wider than the content's max-width, and
@@ -501,9 +563,20 @@ svg {
 
 @media (max-width: 900px) {
   .main {
-    padding: 28px 20px 64px;
+    padding: 24px 20px 72px;
   }
 }
+
+/*
+ * No entrance animation on `.main`, deliberately.
+ *
+ * A fade here would need `opacity` on the content column, and an animated
+ * opacity makes that column a containing block for `position: fixed` — which
+ * is what the case drawer, the confirm overlay and the Cases legend all are.
+ * They would silently start positioning against the column instead of the
+ * viewport. Movement on load is also exactly what this pass exists to remove,
+ * so there is nothing here worth that trade.
+ */
 
 /* ─── page head ───────────────────────────────────────────────────────────── */
 
@@ -511,24 +584,27 @@ svg {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 24px;
-  margin-bottom: 40px;
+  gap: 20px 24px;
+  /* Fixed minimum height so a page-head with controls and one without still
+     put the content below them at the same place. */
+  min-height: 60px;
+  margin-bottom: 28px;
   flex-wrap: wrap;
 }
 
 .eyebrow {
-  font-size: 11.5px;
+  font-size: 11px;
   font-weight: 560;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.07em;
   text-transform: uppercase;
   color: var(--ink-muted);
-  margin-bottom: 10px;
+  margin-bottom: 7px;
 }
 
 h1 {
-  font-size: 26px;
+  font-size: 25px;
   font-weight: 620;
-  letter-spacing: -0.028em;
+  letter-spacing: -0.03em;
   line-height: 1.16;
 }
 
@@ -613,8 +689,9 @@ h2 {
   background: var(--surface);
   border: 1px solid var(--hairline);
   border-radius: var(--radius);
-  padding: 22px 24px;
+  padding: 20px 22px;
   box-shadow: var(--shadow-sm);
+  min-width: 0;
 }
 
 .card-head {
@@ -622,7 +699,7 @@ h2 {
   align-items: baseline;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 20px;
+  margin-bottom: 18px;
 }
 
 .card-sub {
@@ -690,35 +767,52 @@ h2 {
   }
 }
 
-/* ─── abandoned-cart "connect your app" card ─────────────────────────────── */
-
-.connect-card {
-  padding: 0;
-  position: sticky;
-  top: 20px;
-}
-
-.connect-card .panel-head {
-  border-bottom: 1px solid var(--hairline);
-}
+/* ─── abandoned-cart "connect your app" panel ─────────────────────────────
+ *
+ * This was a 300px sticky aside pinned beside the dashboard. Two things were
+ * wrong with that: a code block containing a URL and a bearer token cannot fit
+ * in 300px, so it scrolled sideways forever and still overflowed its column at
+ * common widths; and setup is a thing you do once, which does not earn a
+ * permanent third of every visit to the page.
+ *
+ * It is a full-width, collapsed-by-default panel at the foot of the page now.
+ * The snippet gets the whole content width, so it wraps instead of running off
+ * the edge, and nothing here can push the metrics sideways.
+ */
 
 .connect-body {
-  padding: 14px 16px 16px;
+  padding: 16px;
+  display: grid;
+  grid-template-columns: minmax(0, 320px) minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+@media (max-width: 780px) {
+  .connect-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.connect-fields {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  min-width: 0;
 }
 
 .connect-field {
   flex: 1 1 auto;
   min-width: 0;
-  padding: 5px 8px;
-  border-radius: 6px;
+  padding: 6px 9px;
+  border-radius: var(--radius-sm);
   background: var(--surface-sunken);
   border: 1px solid var(--hairline);
   font-size: 11.5px;
-  overflow-x: auto;
-  white-space: nowrap;
+  /* Wrap rather than scroll: a value you have to drag sideways to read is a
+     value you cannot check before pasting it. */
+  overflow-wrap: anywhere;
+  word-break: break-all;
 }
 
 .connect-confirm {
@@ -726,47 +820,70 @@ h2 {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 8px 10px;
-  border-radius: 8px;
+  padding: 9px 11px;
+  border-radius: var(--radius-sm);
   background: var(--data-soft);
   font-size: 12px;
 }
 
+.connect-snippet {
+  position: relative;
+  min-width: 0;
+}
+
 .connect-code {
   margin: 0;
-  padding: 10px 34px 10px 10px;
-  border-radius: 8px;
+  padding: 12px 78px 12px 12px;
+  border-radius: var(--radius-sm);
   background: var(--surface-sunken);
   border: 1px solid var(--hairline);
-  font-size: 11px;
-  line-height: 1.5;
-  max-height: 220px;
+  font-size: 11.5px;
+  line-height: 1.6;
+  max-height: 260px;
   overflow: auto;
-  white-space: pre;
+  /* `pre` forced a horizontal scrollbar on every line longer than the column.
+     `pre-wrap` + `anywhere` keeps long URLs and keys inside the box. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .connect-code-copy {
   position: absolute;
-  top: 6px;
-  right: 6px;
+  top: 8px;
+  right: 8px;
 }
 
 /* ─── stat tile ───────────────────────────────────────────────────────────── */
 
+/*
+ * The stat tile.
+ *
+ * Fixed minimum height on purpose: a tile whose `foot` is absent must occupy
+ * exactly as much room as one whose foot is present, or a row of four tiles
+ * changes height the moment a number resolves.
+ */
 .stat {
   background: var(--surface);
   border: 1px solid var(--hairline);
   border-radius: var(--radius);
-  padding: 18px 20px 20px;
+  padding: 16px 18px 18px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 5px;
   min-width: 0;
+  min-height: 108px;
   box-shadow: var(--shadow-sm);
+  transition: border-color var(--t-fast) var(--ease);
+}
+
+.stat:hover {
+  border-color: var(--hairline-strong);
 }
 
 .stat-label {
-  font-size: 12.5px;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.005em;
   color: var(--ink-secondary);
   white-space: nowrap;
   overflow: hidden;
@@ -774,16 +891,20 @@ h2 {
 }
 
 .stat-value {
-  font-size: 27px;
+  font-size: 26px;
   font-weight: 600;
-  letter-spacing: -0.03em;
-  line-height: 1.1;
+  letter-spacing: -0.032em;
+  line-height: 1.12;
   font-variant-numeric: proportional-nums;
+  margin-top: auto;
 }
 
 .stat-foot {
   font-size: 12px;
   color: var(--ink-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ─── bars (magnitude, one hue) ───────────────────────────────────────────── */
@@ -1601,11 +1722,12 @@ table.data tbody tr:last-child td {
   background: var(--ink);
   color: var(--page);
   border-radius: var(--radius-sm);
-  padding: 9px 18px;
-  font-size: 13.5px;
-  font-weight: 520;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 530;
   letter-spacing: -0.01em;
-  transition: opacity 0.14s var(--ease), transform 0.08s var(--ease);
+  box-shadow: var(--shadow-sm);
+  transition: opacity var(--t-fast) var(--ease), transform 80ms var(--ease);
   white-space: nowrap;
 }
 
@@ -1622,7 +1744,19 @@ table.data tbody tr:last-child td {
   cursor: not-allowed;
 }
 
+/*
+ * The live countdown, given a floor width.
+ *
+ * It re-renders every second, and "Email in 9s" is narrower than "Email in
+ * 12s" — enough for an auto-width table column to resize under it once a
+ * second, which is the small, constant twitch that made the case table feel
+ * unsettled even after the big shift was gone. Tabular figures fix the digits;
+ * the min-width fixes the word count changing around them.
+ */
 .followup {
+  display: inline-flex;
+  justify-content: center;
+  min-width: 118px;
   font-size: 12px;
   color: var(--ink-muted);
   font-variant-numeric: tabular-nums;
@@ -1684,25 +1818,38 @@ table.data tbody tr:last-child td {
   position: relative;
 }
 
+/*
+ * Two lines, not one.
+ *
+ * On one line the account name, the mode chip and the caret fought over 210px
+ * and the name lost every time — a merchant called "Tradesmetrix" rendered as
+ * "Tra…", which is exactly the fact this control exists to state. The name now
+ * owns the first line outright and the mode sits under it, so both are legible
+ * at the rail's real width.
+ */
 .switcher-face {
   width: 100%;
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    'name caret'
+    'mode caret';
   align-items: center;
-  gap: 8px;
+  gap: 3px 8px;
   padding: 7px 9px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--ink);
   font: inherit;
   font-size: 13px;
   cursor: pointer;
   text-align: left;
-  transition: background 120ms ease, border-color 120ms ease;
+  transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
 }
 
 .switcher-face:hover:not(:disabled) {
-  background: var(--surface-2, var(--surface));
+  background: var(--surface-hover);
   border-color: var(--line-strong, var(--line));
 }
 
@@ -1711,14 +1858,20 @@ table.data tbody tr:last-child td {
 }
 
 .switcher-name {
-  flex: 1;
+  grid-area: name;
   font-weight: 550;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
+.switcher-face > .mode-chip {
+  grid-area: mode;
+  justify-self: start;
+}
+
 .switcher-caret {
+  grid-area: caret;
   font-size: 10px;
   opacity: 0.5;
 }
@@ -1778,7 +1931,29 @@ table.data tbody tr:last-child td {
   letter-spacing: 0.01em;
   white-space: nowrap;
   background: rgb(128 128 128 / 0.12);
-  color: var(--muted);
+  /* `var(--muted)` was never defined — `.muted` is a class, not a token — so
+     every chip that did not match one of the modifiers below inherited its
+     colour instead of taking one. */
+  color: var(--ink-muted);
+}
+
+/* The meta line under a row of metrics: the facts that give the tiles their
+   scope (which window, how many, versus what) without earning tiles of their
+   own. */
+.metrics-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px 14px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+  font-size: 12.5px;
+  color: var(--ink-muted);
+}
+
+.metrics-meta > span:not(:last-child)::after {
+  content: '·';
+  margin-left: 14px;
+  opacity: 0.55;
 }
 
 .mode-dry_run {
@@ -1829,7 +2004,10 @@ table.data tbody tr:last-child td {
   padding: 0 10px 10px;
 }
 
+/* Back to a single centred box at 68px — the two-line grid above has nothing
+   to lay out once the name and the caret are gone. */
 :root[data-sidebar='collapsed'] .switcher-face {
+  display: flex;
   justify-content: center;
   padding: 8px;
 }
@@ -1860,12 +2038,6 @@ table.data tbody tr:last-child td {
   width: 200px;
 }
 
-/* Width is the only thing that should move. Without this the whole grid snaps
-   between two layouts on every toggle. */
-.shell {
-  transition: grid-template-columns 160ms ease;
-}
-
 @media (prefers-reduced-motion: reduce) {
   .shell {
     transition: none;
@@ -1888,7 +2060,9 @@ table.data tbody tr:last-child td {
   background: var(--surface);
   border: 1px solid var(--hairline);
   border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
   overflow: hidden;
+  min-width: 0;
 }
 
 .panel-head {
@@ -1897,8 +2071,41 @@ table.data tbody tr:last-child td {
   justify-content: space-between;
   gap: 12px;
   width: 100%;
-  padding: 13px 16px;
+  min-height: 48px;
+  padding: 10px 16px;
   border-bottom: 1px solid transparent;
+}
+
+/* A panel head that always sits above content, rather than one that only grows
+   its rule when a disclosure is open. */
+.panel-head-ruled {
+  border-bottom-color: var(--hairline);
+}
+
+/*
+ * Any list long enough to run away with the page scrolls inside itself.
+ *
+ * The height is a cap, not a floor — a two-row table is two rows tall. What it
+ * buys is that the page's overall shape stops depending on how much history is
+ * behind it, which is the same guarantee `.table-scroll` gives the case table.
+ */
+.panel-scroll {
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.panel-scroll table.data thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface);
+}
+
+.panel-empty {
+  padding: 28px 18px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--ink-muted);
 }
 
 .panel-toggle {
@@ -1999,11 +2206,16 @@ table.data tbody tr:last-child td {
   white-space: nowrap;
 }
 
+/* Fixed width because the label is a clock: "Up to date" / "12s ago" /
+   "Refreshing…" are three different lengths, and letting the button resize
+   itself every five seconds twitches the whole toolbar. */
 .refresh {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
   height: 32px;
+  min-width: 116px;
   padding: 0 11px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--hairline);
@@ -2847,5 +3059,231 @@ button.trail-case:hover {
   .trail-ref {
     grid-column: 3;
     margin-top: 2px;
+  }
+}
+
+/* ─── scrollbars ───────────────────────────────────────────────────────────
+ *
+ * Every scroll container in this product is *inside* something — a table, a
+ * queue, a drawer. A platform scrollbar at full contrast reads as a second
+ * border on each of them, so they are thinned and tied to the ink scale. The
+ * document scrollbar is deliberately left alone.
+ */
+
+.nav,
+.trail,
+.panel-scroll,
+.table-scroll,
+.queue-list,
+.drawer,
+.connect-code,
+.legend-body {
+  scrollbar-width: thin;
+  scrollbar-color: var(--baseline) transparent;
+}
+
+.nav::-webkit-scrollbar,
+.trail::-webkit-scrollbar,
+.panel-scroll::-webkit-scrollbar,
+.table-scroll::-webkit-scrollbar,
+.queue-list::-webkit-scrollbar,
+.drawer::-webkit-scrollbar,
+.connect-code::-webkit-scrollbar,
+.legend-body::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+
+.nav::-webkit-scrollbar-thumb,
+.trail::-webkit-scrollbar-thumb,
+.panel-scroll::-webkit-scrollbar-thumb,
+.table-scroll::-webkit-scrollbar-thumb,
+.queue-list::-webkit-scrollbar-thumb,
+.drawer::-webkit-scrollbar-thumb,
+.connect-code::-webkit-scrollbar-thumb,
+.legend-body::-webkit-scrollbar-thumb {
+  background: var(--baseline);
+  border-radius: 999px;
+  /* Border-as-inset: the thumb reads as 5px wide with air either side, without
+     needing a separate track colour that would show up as a stripe. */
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+.nav::-webkit-scrollbar-track,
+.trail::-webkit-scrollbar-track,
+.panel-scroll::-webkit-scrollbar-track,
+.table-scroll::-webkit-scrollbar-track,
+.queue-list::-webkit-scrollbar-track,
+.drawer::-webkit-scrollbar-track,
+.connect-code::-webkit-scrollbar-track,
+.legend-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ─── the legend dock ──────────────────────────────────────────────────────
+ *
+ * A reference card, docked bottom-right, for the words the Cases table uses
+ * without defining: recovered, written off, holdout, and the rest. It is a
+ * reference, not a finding — so it is collapsed to a single button by default,
+ * never covers the last row of the table when closed, and scrolls inside
+ * itself rather than growing to whatever the vocabulary happens to be.
+ */
+
+.legend-dock {
+  position: fixed;
+  right: 22px;
+  bottom: 22px;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  /* The dock itself is only a positioning frame — clicks pass through the gap
+     between the button and the panel to the page underneath. */
+  pointer-events: none;
+}
+
+.legend-dock > * {
+  pointer-events: auto;
+}
+
+.legend-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 13px;
+  border-radius: 999px;
+  border: 1px solid var(--hairline-strong);
+  background: var(--surface);
+  color: var(--ink-secondary);
+  font-size: 12.5px;
+  font-weight: 500;
+  box-shadow: var(--shadow-md);
+  transition:
+    color var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease),
+    transform var(--t-fast) var(--ease);
+}
+
+.legend-trigger:hover {
+  color: var(--ink);
+  border-color: var(--ink-muted);
+}
+
+.legend-trigger:active {
+  transform: scale(0.97);
+}
+
+.legend-panel {
+  width: min(320px, calc(100vw - 44px));
+  border-radius: var(--radius);
+  border: 1px solid var(--hairline-strong);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  animation: legend-in var(--t-base) var(--ease);
+}
+
+@keyframes legend-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .legend-panel {
+    animation: none;
+  }
+}
+
+.legend-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 11px 12px 11px 14px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.legend-title {
+  font-size: 13px;
+  font-weight: 560;
+  letter-spacing: -0.01em;
+}
+
+.legend-close {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-sm);
+  color: var(--ink-muted);
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+
+.legend-close:hover {
+  background: var(--surface-hover);
+  color: var(--ink);
+}
+
+.legend-body {
+  max-height: min(380px, 52vh);
+  overflow-y: auto;
+  padding: 6px 14px 14px;
+}
+
+.legend-group {
+  padding-top: 10px;
+}
+
+.legend-group-label {
+  font-size: 10.5px;
+  font-weight: 570;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  padding: 4px 0 6px;
+}
+
+.legend-item {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr);
+  align-items: start;
+  gap: 9px;
+  padding: 6px 0;
+}
+
+.legend-item + .legend-item {
+  border-top: 1px solid color-mix(in srgb, var(--hairline) 60%, transparent);
+}
+
+.legend-item .dot {
+  margin-top: 6px;
+}
+
+.legend-term {
+  font-size: 12.5px;
+  font-weight: 550;
+  letter-spacing: -0.008em;
+}
+
+.legend-def {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-secondary);
+  margin-top: 1px;
+}
+
+@media (max-width: 640px) {
+  .legend-dock {
+    right: 14px;
+    bottom: 14px;
   }
 }

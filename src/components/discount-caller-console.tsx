@@ -188,20 +188,29 @@ export function DiscountCallerConsole({
         </div>
       )}
 
-      <section className="card">
+      <section className="panel">
+        <div className="panel-head panel-head-ruled">
+          <span className="panel-title">
+            Cases you can call
+            {cases.length > 0 && <span className="count-badge">{cases.length}</span>}
+          </span>
+          <span className="card-sub">Open, with a phone number on file</span>
+        </div>
+
         {notice && (
-          <div className="notice" style={{ margin: '12px 20px 0' }}>
+          <div className="notice" style={{ margin: '12px 16px 0' }}>
             <span>{notice}</span>
           </div>
         )}
 
         {cases.length === 0 ? (
-          <p className="subtle" style={{ padding: '16px 20px' }}>
-            No open cases with a phone number on file yet.
-          </p>
+          <p className="panel-empty">No open cases with a phone number on file yet.</p>
         ) : (
-          <div className="table-wrap">
-            <table className="data">
+          /* Scrolls inside itself. A merchant with a hundred callable cases was
+             getting a page several screens long before the call history — which
+             is the half of this page you actually come back to check. */
+          <div className="table-wrap panel-scroll">
+            <table className="data data-cases">
               <thead>
                 <tr>
                   <th className="num">Amount</th>
@@ -214,7 +223,7 @@ export function DiscountCallerConsole({
               <tbody>
                 {cases.map((c) => (
                   <tr key={c.id}>
-                    <td className="num">{inr(c.amountPaise)}</td>
+                    <td className="num amount-cell">{inr(c.amountPaise)}</td>
                     <td>
                       <div className="cell-main">{causeLabel(c.causeClass)}</div>
                       <div className="cell-sub mono">{c.errorReason}</div>
@@ -243,20 +252,27 @@ export function DiscountCallerConsole({
         )}
       </section>
 
-      <section className="card" style={{ marginTop: 20 }}>
-        <div className="panel-head">
-          <span className="panel-title">Call history</span>
-          <button type="button" className="btn-ghost" disabled={syncing} onClick={() => void sync()}>
+      <section className="panel" style={{ marginTop: 20 }}>
+        <div className="panel-head panel-head-ruled">
+          <span className="panel-title">
+            Call history
+            {calls.length > 0 && <span className="count-badge">{calls.length}</span>}
+          </span>
+          <button
+            type="button"
+            className="refresh"
+            disabled={syncing}
+            onClick={() => void sync()}
+            title="Ask the provider for the current status of every call"
+          >
             {syncing ? 'Syncing…' : 'Sync status'}
           </button>
         </div>
         {calls.length === 0 ? (
-          <p className="subtle" style={{ padding: '16px 20px' }}>
-            No calls placed yet.
-          </p>
+          <p className="panel-empty">No calls placed yet.</p>
         ) : (
-          <div className="table-wrap">
-            <table className="data">
+          <div className="table-wrap panel-scroll">
+            <table className="data data-cases">
               <thead>
                 <tr>
                   <th>Phone</th>
