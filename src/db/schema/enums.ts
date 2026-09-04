@@ -80,10 +80,21 @@ export const voiceCallStatusEnum = pgEnum('voice_call_status', [
   'failed',
 ]);
 
+/**
+ * `suppressed` is not a failure and not a success.
+ *
+ * It is a cart this agent deliberately declined to act on because the same
+ * customer already has a payment failure being recovered — see
+ * `core/guards/cart-suppression.ts`. Folding it into `failed` would put a
+ * correct decision in the same bucket as a broken Razorpay call, and hide the
+ * single most useful number this agent has: how often the merchant's app
+ * reports a "cart" that is really a decline.
+ */
 export const abandonedCartStatusEnum = pgEnum('abandoned_cart_status', [
   'detected',
   'emailed',
   'recovered',
   'expired',
   'failed',
+  'suppressed',
 ]);

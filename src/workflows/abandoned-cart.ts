@@ -11,7 +11,13 @@
 
 import type { Database } from '../db/client.js';
 import { getCustomer, upsertCustomer } from '../db/repos/customers.js';
-import { recordCartLinkIssued, type CartEmailStatus } from '../db/repos/abandoned-carts.js';
+import {
+  markCartSuppressed,
+  recordCartLinkIssued,
+  type CartEmailStatus,
+} from '../db/repos/abandoned-carts.js';
+import { recentCaseActivityForCustomer } from '../db/repos/cases.js';
+import { shouldSuppressCart } from '../core/guards/cart-suppression.js';
 import { razorpayForMerchant, channelsForMerchant } from './merchant-clients.js';
 import { createPaymentLink } from '../adapters/razorpay/resources.js';
 import { proposeCartDiscount } from '../core/guards/cart-discount.js';
@@ -46,6 +52,15 @@ export type ProcessCartResult =
       emailStatus: CartEmailStatus;
       emailDetail: string | null;
     }
+  /**
+   * Deliberately not acted on. Not an error and not a send.
+   *
+   * The one case today is a customer who already has a payment failure being
+   * recovered: the merchant's app cannot see the decline, so it reports a
+   * perfectly reasonable "abandoned cart" for a checkout the person was
+   * actively trying to pay. See `core/guards/cart-suppression.ts`.
+   */
+  | { ok: true; suppressed: true; reason: string }
   | { ok: false; status: number; reason: string };
 
 export async function processAbandonedCart(db: Database, input: ProcessCartInput): Promise<ProcessCartResult> {
@@ -76,6 +91,26 @@ export async function processAbandonedCart(db: Database, input: ProcessCartInput
     return { ok: false, status: 422, reason: 'could not resolve a customer record from the email/phone given' };
   }
   const customer = await getCustomer(db, customerId);
+
+  /*
+   * Is this a cart at all, or a payment that already failed?
+   *
+   * Checked here — after the customer is resolved, before a Razorpay link is
+   * created — because the customer row is the only thing the two agents share
+   * and because a link we are not going to send should never be created. It is
+   * one query, and it runs before anything external happens.
+   */
+  const activity = await recentCaseActivityForCustomer(db, input.merchantId, customerId);
+  const verdict = shouldSuppressCart({
+    now: new Date(),
+    hasLiveCase: activity.hasLiveCase,
+    mostRecentCaseAt: activity.mostRecentCaseAt,
+  });
+
+  if (verdict.suppress) {
+    await markCartSuppressed(db, input.cartRowId, customerId, verdict.reason);
+    return { ok: true, suppressed: true, reason: verdict.reason };
+  }
 
   let link;
   const expiresAt = new Date(Date.now() + LINK_VALID_HOURS * 60 * 60 * 1000);

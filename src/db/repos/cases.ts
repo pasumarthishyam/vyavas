@@ -276,6 +276,40 @@ export async function transitionCase(
   return { ok: true, from: current.state, to, reason };
 }
 
+/**
+ * Has this customer attempted a payment at this merchant, and is one being
+ * recovered right now?
+ *
+ * The join between the two agents. `abandoned_carts` carries no order id and no
+ * payment reference — there was no payment, which is the whole reason that
+ * table exists — so the customer row is the only thing the two share.
+ *
+ * One query returns both facts because they answer one question and must
+ * describe the same instant: read separately, a case could resolve between them
+ * and the caller would see "no live case, no recent case" for someone whose
+ * ladder finished a second ago.
+ */
+export async function recentCaseActivityForCustomer(
+  db: Database,
+  merchantId: string,
+  customerId: string,
+): Promise<{ hasLiveCase: boolean; mostRecentCaseAt: Date | null }> {
+  const [row] = await db
+    .select({
+      live: sql<number>`count(*) filter (where ${recoveryCases.state} in ('detected','diagnosed','executing','paused'))::int`,
+      mostRecent: sql<Date | null>`max(${recoveryCases.createdAt})`,
+    })
+    .from(recoveryCases)
+    .where(
+      and(eq(recoveryCases.merchantId, merchantId), eq(recoveryCases.customerId, customerId)),
+    );
+
+  return {
+    hasLiveCase: Number(row?.live ?? 0) > 0,
+    mostRecentCaseAt: row?.mostRecent ? new Date(row.mostRecent) : null,
+  };
+}
+
 // ─── pause and resume ────────────────────────────────────────────────────────
 
 export interface ResumedCase {

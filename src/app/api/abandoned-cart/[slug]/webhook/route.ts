@@ -155,6 +155,23 @@ export async function POST(
     return NextResponse.json({ ok: false, cartId: row.id, reason: result.reason }, { status: result.status });
   }
 
+  /*
+   * Deliberately not acted on, and reported as a success.
+   *
+   * 200, not an error: the merchant's app did exactly the right thing by
+   * telling us, and a 4xx here would make a correct integration look broken and
+   * invite them to retry. The reason is returned so it is visible in their logs
+   * rather than only in ours.
+   */
+  if ('suppressed' in result) {
+    return NextResponse.json({
+      ok: true,
+      cartId: row.id,
+      skipped: 'payment_already_attempted',
+      reason: result.reason,
+    });
+  }
+
   return NextResponse.json({
     ok: true,
     cartId: row.id,

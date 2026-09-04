@@ -216,6 +216,21 @@ function stageOf(c: AbandonedCartRow): Line {
   if (c.status === 'failed') {
     return { label: 'Could not process', detail: c.failureReason, tone: 'failed' };
   }
+  /*
+   * Not a failure. A correct decision.
+   *
+   * The same person already had a payment failure being recovered, so the
+   * failed-payment agent owns them and this cart was declined rather than
+   * emailed. Toned muted, never red — a merchant reading red here would go
+   * looking for a bug in an integration that is working exactly as intended.
+   */
+  if (c.status === 'suppressed') {
+    return {
+      label: 'Left to the recovery agent',
+      detail: c.emailDetail ?? 'this customer had a payment failure in flight',
+      tone: 'muted',
+    };
+  }
   if (c.status === 'emailed') {
     const expires = maybeDate(c.paymentLinkExpiresAt);
     const past = expires != null && expires.getTime() <= Date.now();

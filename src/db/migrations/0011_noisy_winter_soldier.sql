@@ -1,0 +1,1 @@
+ALTER TYPE "public"."abandoned_cart_status" ADD VALUE 'suppressed';

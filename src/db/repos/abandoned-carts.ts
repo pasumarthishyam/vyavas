@@ -148,6 +148,35 @@ export async function recordCartLinkIssued(
     .where(eq(abandonedCarts.id, id));
 }
 
+/**
+ * This cart was a payment failure in disguise, and we declined to act on it.
+ *
+ * A distinct status rather than `failed`, because nothing failed — the decision
+ * was correct. It is also the single most useful number this agent produces:
+ * how often the merchant's own app reports a "cart" that is really a decline,
+ * which is a signal about THEIR integration, not about ours.
+ *
+ * `customerId` is stamped even though no email goes out, so the console can
+ * still show who it was about and the row joins to the case that won.
+ */
+export async function markCartSuppressed(
+  db: Database,
+  id: string,
+  customerId: string | null,
+  reason: string,
+): Promise<void> {
+  await db
+    .update(abandonedCarts)
+    .set({
+      status: 'suppressed',
+      customerId,
+      emailStatus: 'suppressed',
+      emailDetail: reason.slice(0, 2000),
+      updatedAt: sql`now()`,
+    })
+    .where(eq(abandonedCarts.id, id));
+}
+
 export async function markCartRecovered(db: Database, id: string): Promise<void> {
   await db
     .update(abandonedCarts)
