@@ -27,7 +27,7 @@
   ladder:
     - at: 3m
       action: nudge
-      channels: [whatsapp, sms]
+      channels: [whatsapp]
       intent: switch_method
       suggest: [retry_same, upi_intent]
     - at: 4h
@@ -37,7 +37,7 @@
       suggest: [upi_intent, other_card]
     - at: 26h
       action: nudge
-      channels: [email, sms]
+      channels: [email]
       intent: final_reminder
   preconditions:
     [order_unpaid, no_live_attempt, consent_ok, not_quiet_hours, within_frequency_cap, channel_deliverable]
@@ -58,7 +58,7 @@
   ladder:
     - at: 3m
       action: nudge
-      channels: [whatsapp, sms]
+      channels: [whatsapp]
       intent: switch_method
       suggest: [retry_same, upi_intent]
     - at: 6h

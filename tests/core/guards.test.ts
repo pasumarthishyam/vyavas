@@ -114,9 +114,10 @@ function facts(over: Partial<PreconditionFacts> = {}): PreconditionFacts {
   return {
     now: AFTERNOON,
     orderPaid: false,
+    paymentLinkPaid: false,
     deadlinePassed: false,
     customerOptedOut: false,
-    eligibleChannels: ['whatsapp', 'sms'],
+    eligibleChannels: ['whatsapp', 'email'],
     lastAttemptAt: null,
     liveAttemptWindowMinutes: 3,
     recentMessageCount: 0,
@@ -185,15 +186,29 @@ describe('aborts — the reason will never stop being true', () => {
     expect(r.failed).toBe('channel_deliverable');
   });
 
-  it('aborts when the merchant kill switch is off', () => {
+  it('PAUSES rather than aborting when the merchant has paused the agent', () => {
+    /*
+     * The distinction this test exists to pin.
+     *
+     * A paused merchant used to produce an abort, and an abort is terminal —
+     * so pausing an account destroyed every case in flight and switching back
+     * recovered none of them. It must be its own disposition, or the ladder
+     * cannot tell "park this" from "this is over".
+     */
     const r = evaluatePreconditions([], facts({ executionEnabled: false }));
-    expect(r.disposition).toBe('abort');
-    expect(r.failed).toBe('execution_disabled');
+    expect(r.disposition).toBe('paused');
+    expect(r.failed).toBe('execution_paused');
+    // No retryAt: a pause ends when a person ends it, not at a time we can name.
+    expect(r.retryAt).toBeNull();
   });
 
-  it('puts the kill switch ahead of everything else', () => {
+  it('puts the pause ahead of everything else, including a paid order', () => {
+    // Ordered above the paid checks on purpose. Those two reach the ledger and
+    // mark a case recovered, and a paused agent should not be writing outcomes.
+    // The webhook and the reconciliation sweep still catch the payment.
     const r = evaluatePreconditions(ALL, facts({ executionEnabled: false, orderPaid: true }));
-    expect(r.failed).toBe('execution_disabled');
+    expect(r.disposition).toBe('paused');
+    expect(r.failed).toBe('execution_paused');
   });
 });
 
@@ -322,8 +337,8 @@ describe('ordering', () => {
 
 describe('selectChannel', () => {
   it('takes the first preferred channel the customer can receive on', () => {
-    expect(selectChannel(['whatsapp', 'sms'], ['sms', 'email'])).toBe('sms');
-    expect(selectChannel(['whatsapp', 'sms'], ['whatsapp', 'sms'])).toBe('whatsapp');
+    expect(selectChannel(['whatsapp', 'email'], ['email'])).toBe('email');
+    expect(selectChannel(['whatsapp', 'email'], ['whatsapp', 'email'])).toBe('whatsapp');
   });
 
   it('returns null when nothing matches', () => {

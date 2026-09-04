@@ -19,7 +19,7 @@ compiler that refuses to build.
 | One open alert per condition | Partial unique index on unresolved alerts |
 | One escalation per rung | Unique `idempotency_key`, same format as the action row |
 | One pending taxonomy proposal per reason | Partial unique index on `status = 'pending'` |
-| A new merchant sends nothing | `dry_run: true`, `execution_enabled: false` by default |
+| A new merchant sends nothing | `execution_enabled: false` by default, which means PAUSED |
 
 `npm run db:doctor` checks each of these **by name** and prints what breaks in
 the real world if one is missing. It exists because "migrations applied

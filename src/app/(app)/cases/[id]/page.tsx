@@ -1,9 +1,9 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
-import { getDb } from '../../../db/client';
-import { getCaseDetail } from '../../../db/queries/case-detail';
-import { Ladder, Pill, StatePill, causeHint, causeLabel, inr, relativeTime } from '../../../components/ui';
+import { getDb } from '../../../../db/client';
+import { getCaseDetail } from '../../../../db/queries/case-detail';
+import { Ladder, Pill, StatePill, causeHint, causeLabel, inr, relativeTime } from '../../../../components/ui';
 
 export const dynamic = 'force-dynamic';
 

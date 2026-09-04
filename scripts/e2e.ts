@@ -159,7 +159,6 @@ async function main(): Promise<void> {
         // Everything this run needs, set explicitly so nothing is inherited by
         // accident. Defaults elsewhere stay safe.
         executionEnabled: true,
-        dryRun: !realSends,
         holdoutEnabled: false, // guarantee treatment, or there is nothing to watch
         frequencyCapPerDay: 3, // the card_expired ladder has 3 touches
         // A one-hour quiet window at 3am, so an arbitrary run time does not
@@ -172,7 +171,7 @@ async function main(): Promise<void> {
 
     line('merchant', `${m!.name} (${SLUG})`);
     line('execution', m!.executionEnabled ? 'ENABLED' : 'disabled');
-    line('dry run', m!.dryRun ? 'ON — nothing sends' : 'OFF — messages are real');
+    line('send mode', m!.executionEnabled ? 'LIVE — messages are real' : 'PAUSED — nothing sends');
     line('frequency cap', `${m!.frequencyCapPerDay} per 24h`);
 
     // ── 2. a payment fails ────────────────────────────────────────────────

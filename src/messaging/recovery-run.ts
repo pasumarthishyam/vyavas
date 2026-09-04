@@ -532,7 +532,9 @@ async function deliver(db: Database, input: DeliverInput): Promise<StepResult> {
     idempotencyKey: `${messageKey(input.caseId, input.rung, 'nudge')}${input.keySuffix ?? ''}`,
     // Holdout and dry-run still suppress. The console can start a recovery;
     // it cannot override the merchant's own switch.
-    suppressedReason: gathered.dryRun ? 'dry_run' : null,
+    // Holdout is the only suppression left; a paused merchant never reaches
+    // here, because the gate parks the case before this path is taken.
+    suppressedReason: null,
     channels: await channelsForMerchant(db, input.merchantId),
   });
 

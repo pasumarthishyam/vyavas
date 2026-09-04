@@ -151,16 +151,34 @@ because that ratio is how you learn whether the queue is worth having.
 lanes (Messages / AI / Decisions / System), grouped by day. See
 [safety](./04-safety.md#privacy) for what it will not show you.
 
-**Send mode** has three states, not two, because the system genuinely has three:
+**Send mode** has two states, and the pause is a real pause:
 
 | Mode | Behaviour |
 |---|---|
-| `off` | Nothing runs. The gate aborts every rung |
-| `dry_run` | Everything runs — gate, composition, ledger — and nothing is sent |
-| `live` | Messages reach real recipients |
+| `paused` | Cases in flight are PARKED in the `paused` state, keeping their rung, deadline and ledger. Nothing is sent |
+| `live` | Everything runs and messages reach whoever the routing points at |
 
-`dry_run` is the useful middle: you see exactly what would go out, to whom, with
-the real copy.
+Switching to live resumes this merchant's parked cases in the same request. The
+fifteen-minute sweep is the backstop for a flag changed some other way, and the
+two cannot double-start a case: the claim is a conditional `UPDATE` and only one
+caller wins the row.
+
+`paused` is not a stop. It used to be — the state was called `off`, it made the
+gate abort, and an abort is terminal, so pausing an account for an afternoon
+destroyed every live case and turning it back on recovered none of them.
+
+From a terminal, when the console is not the right tool:
+
+```bash
+npx tsx scripts/merchant.ts mode --slug <merchant> --set paused
+npx tsx scripts/merchant.ts mode --slug <merchant> --set live
+```
+
+`npx tsx`, not `npm run` — on PowerShell npm claims `--slug` as one of its own
+options and passes the bare value through as a positional.
+
+Note the difference: the CLI only writes the flag, so parked cases resume on the
+next sweep rather than immediately.
 
 ---
 

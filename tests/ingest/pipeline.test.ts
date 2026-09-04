@@ -10,9 +10,17 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 
-import { FAILURE_SCENARIOS, downtimeEnvelope, orderPaidEnvelope, paymentFailedEnvelope } from '@adapters/razorpay/fixtures/webhooks.js';
+import {
+  FAILURE_SCENARIOS,
+  downtimeEnvelope,
+  orderPaidEnvelope,
+  paymentFailedEnvelope,
+  paymentLinkPaidEnvelope,
+} from '@adapters/razorpay/fixtures/webhooks.js';
 import { processEvent } from '@ingest/pipeline.js';
 import type { HandlerContext } from '@ingest/pipeline.js';
+import { listCasesAwaitingLinkPayment } from '../../src/db/repos/cases.js';
+import { listPendingAbandonedCarts } from '../../src/db/repos/abandoned-carts.js';
 import { createTestDb, schema, seedMerchant, type TestDb } from '../db/harness.js';
 
 const NOW = new Date('2026-08-27T14:10:00.000Z');
@@ -306,6 +314,249 @@ describe('order.paid is the kill switch', () => {
 
     const original = await caseRow(failed.caseId!);
     expect(original.state).toBe('recovered');
+  });
+});
+
+/**
+ * The recovery link is the whole product working, and until this suite existed
+ * it was the one outcome the system could not record.
+ *
+ * A payment link creates its OWN order when paid, so `payload.order.entity.id`
+ * on this event is not the order that failed. The handler used to resolve by
+ * that id, find nothing, and report `no_live_case` — for a customer who had
+ * just paid. The case then received every remaining rung and was written off as
+ * lost, with no recovered amount anywhere.
+ */
+describe('payment_link.paid — the recovery link was paid', () => {
+  it('closes the case the link was created for, and records what arrived', async () => {
+    const failed = await processEvent(ctx, FAILURE_SCENARIOS.card_expired());
+    const caseId = failed.caseId!;
+
+    // The ladder stores the link on the case when it creates it.
+    await t.db
+      .update(schema.recoveryCases)
+      .set({ rzpPaymentLinkId: 'plink_TEST00000001', rzpPaymentLinkUrl: 'https://rzp.io/i/testlink' })
+      .where(eq(schema.recoveryCases.id, caseId));
+
+    const paid = await processEvent(ctx, paymentLinkPaidEnvelope({ referenceId: caseId }));
+
+    expect(paid.handled).toBe(true);
+    expect(paid.outcome).toBe('case_recovered');
+    expect(paid.caseId).toBe(caseId);
+
+    const c = await caseRow(caseId);
+    expect(c.state).toBe('recovered');
+    expect(c.recoveredAmountPaise).toBe(184300);
+    expect(c.resolvedAt).not.toBeNull();
+  });
+
+  it('does NOT resolve by the order id on the event', async () => {
+    // The regression guard. The link's own order is a real order id that
+    // belongs to nothing we track; resolving by it is what silently lost every
+    // link payment. The failed order is `order_TEST000000001`.
+    const failed = await processEvent(ctx, FAILURE_SCENARIOS.card_expired());
+
+    const paid = await processEvent(
+      ctx,
+      paymentLinkPaidEnvelope({ referenceId: failed.caseId!, linkOrderId: 'order_TEST000000001' }),
+    );
+
+    // Still resolved — by reference_id, which is the point. If this ever starts
+    // depending on the order id it will pass here and fail the test above.
+    expect(paid.outcome).toBe('case_recovered');
+    expect((await caseRow(failed.caseId!)).state).toBe('recovered');
+  });
+
+  it('records the DISCOUNTED amount, not the amount at risk', async () => {
+    // A discount-caller link is deliberately less than the order. The recovered
+    // figure must be what the customer actually paid, or the dashboard reports
+    // revenue that never arrived.
+    const failed = await processEvent(ctx, FAILURE_SCENARIOS.card_expired());
+
+    await processEvent(
+      ctx,
+      paymentLinkPaidEnvelope({ referenceId: failed.caseId!, amount: 184300, amountPaid: 164300 }),
+    );
+
+    const c = await caseRow(failed.caseId!);
+    expect(c.state).toBe('recovered');
+    expect(c.recoveredAmountPaise).toBe(164300);
+    expect(c.amountAtRiskPaise).toBe(184300);
+  });
+
+  it('falls back to the stored link id when the link carries no reference', async () => {
+    const failed = await processEvent(ctx, FAILURE_SCENARIOS.card_expired());
+    await t.db
+      .update(schema.recoveryCases)
+      .set({ rzpPaymentLinkId: 'plink_NOREFERENCE' })
+      .where(eq(schema.recoveryCases.id, failed.caseId!));
+
+    const paid = await processEvent(
+      ctx,
+      paymentLinkPaidEnvelope({ referenceId: '', linkId: 'plink_NOREFERENCE' }),
+    );
+
+    expect(paid.outcome).toBe('case_recovered');
+    expect((await caseRow(failed.caseId!)).state).toBe('recovered');
+  });
+
+  it('closes an abandoned cart whose link was paid', async () => {
+    const [cart] = await t.db
+      .insert(schema.abandonedCarts)
+      .values({
+        merchantId: ctx.merchantId,
+        externalCartId: 'cart-1',
+        customerEmail: 'rahul@example.com',
+        amountPaise: 184300,
+        status: 'emailed',
+        paymentLinkId: 'plink_CART000000001',
+      })
+      .returning({ id: schema.abandonedCarts.id });
+
+    const paid = await processEvent(ctx, paymentLinkPaidEnvelope({ referenceId: cart!.id }));
+    expect(paid.outcome).toBe('cart_recovered');
+
+    const [row] = await t.db
+      .select()
+      .from(schema.abandonedCarts)
+      .where(eq(schema.abandonedCarts.id, cart!.id));
+    expect(row!.status).toBe('recovered');
+    expect(row!.paymentConfirmedAt).not.toBeNull();
+  });
+
+  it('closes a discount call and its case when the negotiated link is paid', async () => {
+    const failed = await processEvent(ctx, FAILURE_SCENARIOS.card_expired());
+
+    const [call] = await t.db
+      .insert(schema.voiceCalls)
+      .values({
+        caseId: failed.caseId!,
+        merchantId: ctx.merchantId,
+        vapiCallId: 'call_TEST0001',
+        customerPhone: '+919876543210',
+        status: 'ended',
+        discountTierOffered: 1,
+        discountAmountPaise: 20_000,
+        paymentLinkId: 'plink_VOICE00000001',
+        paymentLinkAmountPaise: 164_300,
+      })
+      .returning({ id: schema.voiceCalls.id });
+
+    const paid = await processEvent(
+      ctx,
+      paymentLinkPaidEnvelope({ referenceId: call!.id, amount: 164_300, amountPaid: 164_300 }),
+    );
+
+    expect(paid.outcome).toBe('voice_call_recovered');
+
+    const [row] = await t.db
+      .select()
+      .from(schema.voiceCalls)
+      .where(eq(schema.voiceCalls.id, call!.id));
+    expect(row!.paymentConfirmedAt).not.toBeNull();
+
+    // Both halves close: the call's own confirmation column AND the recovery
+    // case it was placed against. Before this, a customer who paid after the
+    // call ended was never confirmed at all — `end-of-call-report` fires while
+    // they are still reading the link out, and the "phase-2 sweep" its comment
+    // refers to was never written.
+    const c = await caseRow(failed.caseId!);
+    expect(c.state).toBe('recovered');
+    expect(c.recoveredAmountPaise).toBe(164_300);
+  });
+
+  it('is idempotent — a replayed delivery does not double-close', async () => {
+    const failed = await processEvent(ctx, FAILURE_SCENARIOS.card_expired());
+    const first = await processEvent(ctx, paymentLinkPaidEnvelope({ referenceId: failed.caseId! }));
+    const second = await processEvent(ctx, paymentLinkPaidEnvelope({ referenceId: failed.caseId! }));
+
+    expect(first.outcome).toBe('case_recovered');
+    // Terminal states never reopen, so the second delivery is a recorded no-op
+    // rather than a second recovery counted twice.
+    expect(second.outcome).toBe('case_already_closed');
+    expect((await caseRow(failed.caseId!)).state).toBe('recovered');
+  });
+
+  it('is a harmless no-op for a link that belongs to nothing we track', async () => {
+    // A merchant may create their own payment links. Not an error, and it must
+    // not fail the delivery.
+    const r = await processEvent(ctx, paymentLinkPaidEnvelope({ referenceId: 'not-a-uuid' }));
+    expect(r.handled).toBe(true);
+    expect(r.outcome).toBe('unmatched');
+  });
+
+  it('does not touch another merchant’s case', async () => {
+    const failed = await processEvent(ctx, FAILURE_SCENARIOS.card_expired());
+    const otherMerchantId = await seedMerchant(t.db, { slug: 'other' });
+    const otherCtx: HandlerContext = { ...ctx, merchantId: otherMerchantId };
+
+    const r = await processEvent(otherCtx, paymentLinkPaidEnvelope({ referenceId: failed.caseId! }));
+    expect(r.outcome).toBe('unmatched');
+    expect((await caseRow(failed.caseId!)).state).toBe('diagnosed');
+  });
+});
+
+/**
+ * The webhook and the sweeps must not fight.
+ *
+ * Both close a paid link, deliberately: the webhook is the fast path, the
+ * sweeps are the backstop for a delivery that never arrived. The risk in adding
+ * the fast path is that the two now race on the same rows, so what matters is
+ * that whichever wins takes the other's work off the queue.
+ */
+describe('the webhook and the reconciliation sweeps agree', () => {
+  it('takes a case off the link-reconciliation queue once the webhook closes it', async () => {
+    const failed = await processEvent(ctx, FAILURE_SCENARIOS.card_expired());
+    await t.db
+      .update(schema.recoveryCases)
+      .set({ rzpPaymentLinkId: 'plink_TEST00000001' })
+      .where(eq(schema.recoveryCases.id, failed.caseId!));
+
+    // Before: the sweep would pick this up and ask Razorpay about the link.
+    expect((await listCasesAwaitingLinkPayment(t.db)).map((r) => r.id)).toContain(failed.caseId);
+
+    await processEvent(ctx, paymentLinkPaidEnvelope({ referenceId: failed.caseId! }));
+
+    // After: nothing left to reconcile. The case is no longer live and carries
+    // a resolvedAt, so the sweep skips it rather than re-closing it.
+    expect((await listCasesAwaitingLinkPayment(t.db)).map((r) => r.id)).not.toContain(failed.caseId);
+  });
+
+  it('takes a cart off the confirmation sweep once the webhook closes it', async () => {
+    const [cart] = await t.db
+      .insert(schema.abandonedCarts)
+      .values({
+        merchantId: ctx.merchantId,
+        externalCartId: 'cart-sweep',
+        customerEmail: 'rahul@example.com',
+        amountPaise: 184300,
+        status: 'emailed',
+        paymentLinkId: 'plink_CARTSWEEP001',
+      })
+      .returning({ id: schema.abandonedCarts.id });
+
+    expect((await listPendingAbandonedCarts(t.db)).map((r) => r.id)).toContain(cart!.id);
+
+    await processEvent(ctx, paymentLinkPaidEnvelope({ referenceId: cart!.id }));
+
+    // The 15-minute sweep in `sweep-abandoned-carts` scans exactly this set, so
+    // an emptied queue is what proves it will not double-handle the row.
+    expect((await listPendingAbandonedCarts(t.db)).map((r) => r.id)).not.toContain(cart!.id);
+  });
+
+  it('leaves an unpaid case on the queue for the sweep to pick up', async () => {
+    // The other direction: the webhook must not remove work it did not do.
+    const failed = await processEvent(ctx, FAILURE_SCENARIOS.card_expired());
+    await t.db
+      .update(schema.recoveryCases)
+      .set({ rzpPaymentLinkId: 'plink_STILLUNPAID' })
+      .where(eq(schema.recoveryCases.id, failed.caseId!));
+
+    // A link paid for something else entirely.
+    await processEvent(ctx, paymentLinkPaidEnvelope({ referenceId: 'not-ours' }));
+
+    expect((await listCasesAwaitingLinkPayment(t.db)).map((r) => r.id)).toContain(failed.caseId);
+    expect((await caseRow(failed.caseId!)).state).toBe('diagnosed');
   });
 });
 

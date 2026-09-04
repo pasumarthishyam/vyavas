@@ -77,6 +77,7 @@ describe('the category map', () => {
       'diagnosed',
       'escalated',
       'ladder_complete',
+      'ladder_paused',
       'merchant_alerted',
       'payment_link_created',
       'payment_received',
@@ -85,6 +86,7 @@ describe('the category map', () => {
       'rung_aborted',
       'rung_deferred',
       'rung_fired',
+      'rung_paused',
       'rung_uncomposable',
       'state_changed',
     ];

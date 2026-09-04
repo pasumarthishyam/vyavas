@@ -12,9 +12,9 @@
  * through the REAL `processEvent`, the same function the webhook calls, so the
  * diagnosis you see is the diagnosis production would produce.
  *
- * The merchant row it creates keeps the safe defaults: `execution_enabled`
- * false, `dry_run` true. Backfilling cannot message anyone, by construction and
- * not by care.
+ * The merchant row it creates keeps the safe default: `execution_enabled`
+ * false, which means PAUSED. Backfilling cannot message anyone, by construction
+ * and not by care.
  *
  * On old failures: a case detected months ago is already past its deadline, so
  * the gate aborts every rung. That is correct — nobody wants a recovery message
@@ -112,7 +112,6 @@ async function main(): Promise<void> {
           // Safe defaults, stated rather than assumed. A real account must not
           // start messaging because someone ran a backfill.
           executionEnabled: false,
-          dryRun: true,
         })
         .returning();
       merchant = created!;

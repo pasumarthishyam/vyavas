@@ -36,10 +36,23 @@ export const merchants = pgTable(
 
     // ── the bounded-autonomy dials ──
 
-    /** Master switch. When false nothing is sent, whatever any ladder says. */
+    /**
+     * PAUSED (false) or LIVE (true). The merchant's own hand on the tap.
+     *
+     * False is a pause, not a stop. A ladder that meets it parks its case in
+     * `paused` and ends its run; switching back to live claims those cases and
+     * starts them again from the rung they were on. Nothing is discarded.
+     *
+     * That is a change of meaning, not just of wording. This flag used to make
+     * the gate ABORT, and an abort is terminal — so pausing an account
+     * permanently destroyed every case in flight, and turning it back on
+     * recovered none of them. The button said "Off" and behaved like "cancel
+     * everything".
+     *
+     * Defaults to false, so a new merchant is paused and sends nothing until a
+     * person decides otherwise.
+     */
     executionEnabled: boolean('execution_enabled').notNull().default(false),
-    /** Plan and log every action, send nothing. The default for a new merchant. */
-    dryRun: boolean('dry_run').notNull().default(true),
 
     /** Holdout share in basis points. 500 = 5%. */
     holdoutBasisPoints: integer('holdout_basis_points').notNull().default(500),

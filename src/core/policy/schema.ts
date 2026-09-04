@@ -26,7 +26,7 @@ import {
   ERROR_STEPS,
   PAYMENT_METHODS,
 } from '../case/types.js';
-import { CHANNELS, MESSAGE_INTENTS } from '../actions/types.js';
+import { MESSAGE_INTENTS, SENDABLE_CHANNELS } from '../actions/types.js';
 import { AMOUNT_BANDS } from '../money.js';
 import { CAUSE_CLASSES } from '../taxonomy/cause-class.js';
 import { isDuration } from './duration.js';
@@ -76,8 +76,14 @@ export const nudgeRungSchema = z
   .object({
     ...rungBase,
     action: z.literal('nudge'),
-    /** Ordered by preference; the channel layer takes the first eligible one. */
-    channels: z.array(enumOf(CHANNELS)).nonempty(),
+    /**
+     * Ordered by preference; the channel layer takes the first eligible one.
+     *
+     * Validated against `SENDABLE_CHANNELS`, not the full `CHANNELS` vocabulary.
+     * A channel with no client behind it resolves to nothing at runtime and the
+     * touch is lost without an error, so naming one is a build failure here.
+     */
+    channels: z.array(enumOf(SENDABLE_CHANNELS)).nonempty(),
     intent: enumOf(MESSAGE_INTENTS),
     /** Omit to inherit the rails the diagnosis already worked out. */
     suggest: z.array(enumOf(ALTERNATE_RAILS)).optional(),
@@ -120,7 +126,7 @@ export const preDebitNoticeRungSchema = z
   .object({
     ...rungBase,
     action: z.literal('send_pre_debit_notice'),
-    channels: z.array(enumOf(CHANNELS)).nonempty(),
+    channels: z.array(enumOf(SENDABLE_CHANNELS)).nonempty(),
     /** RBI requires notice ahead of an e-mandate debit. */
     leadTime: duration,
   })

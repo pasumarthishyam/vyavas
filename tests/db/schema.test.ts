@@ -275,15 +275,15 @@ describe('operational guarantees', () => {
 });
 
 describe('defaults are safe', () => {
-  it('starts a new merchant in dry-run with execution disabled', async () => {
+  it('starts a new merchant PAUSED', async () => {
     const [m] = await t.db
       .select()
       .from(schema.merchants)
       .where(eq(schema.merchants.id, merchantId));
 
     // A merchant who connects must not have anything sent on their behalf
-    // until they explicitly turn it on.
-    expect(m!.dryRun).toBe(true);
+    // until they explicitly turn it on. This is the guarantee that survived
+    // the removal of dry run: `execution_enabled` false IS paused.
     expect(m!.executionEnabled).toBe(false);
     expect(m!.holdoutEnabled).toBe(true);
     expect(m!.frequencyCapPerDay).toBeGreaterThan(0);

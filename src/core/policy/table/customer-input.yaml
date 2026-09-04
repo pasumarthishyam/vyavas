@@ -49,9 +49,14 @@
 # ── why email, not sms ──
 #
 # There is no SMS client (see workflows/channels.ts — only whatsapp and email
-# are built), so an sms entry silently resolves to nothing. Email is the honest
+# are built), so an sms entry silently resolved to nothing. Email is the honest
 # second channel, and it is the one that survives a customer having no WhatsApp
 # account at all.
+#
+# This class got that right first. The rest of the table did not, and named
+# `sms` on eighteen rungs that could never send on it. `sms` is no longer a
+# value the schema accepts (see SENDABLE_CHANNELS in core/actions/types.ts), so
+# the mistake is now a build failure rather than a quietly dropped touch.
 #
 # ── the ceiling ──
 #

@@ -29,7 +29,7 @@ import { gatherFacts } from '../facts.js';
 import { executeRung } from '../executor.js';
 import { razorpayForMerchant } from '../merchant-clients.js';
 import { inngest, type CaseDiagnosedData } from '../client.js';
-import { loadCaseForRun } from '../case-run.js';
+import { closeCaseFromGate, loadCaseForRun } from '../case-run.js';
 
 /**
  * The subset of Inngest step tools this workflow uses.
@@ -59,9 +59,19 @@ export const runLadder = inngest.createFunction(
   {
     id: 'run-ladder',
     triggers: [{ event: 'case/diagnosed' }],
-    // One run per case, ever. Without this a duplicate `case/diagnosed` would
-    // start a second ladder against the same case and double every message.
-    idempotency: 'event.data.caseId',
+    /*
+     * One run per RUN KEY, ever. Without this a duplicate `case/diagnosed`
+     * would start a second ladder against the same case and double every
+     * message.
+     *
+     * Keyed on `runKey` rather than `caseId` so a case can legitimately run
+     * again after being paused. The key is the case id on a first run and
+     * `<caseId>:r<n>` on the nth resume, so a duplicate of either is still
+     * refused while a genuine resume is not. Keying on the case id alone made
+     * resume impossible: the republished event was swallowed by this guard and
+     * the case sat in `executing` with no run behind it.
+     */
+    idempotency: 'event.data.runKey',
     // Per-merchant concurrency, so one merchant's outage burst cannot starve
     // every other tenant's workflows.
     //
@@ -132,7 +142,20 @@ export const runLadder = inngest.createFunction(
     const attempt = async (i: number, rung: (typeof policy.ladder)[number], stepId: string) =>
       step.run(stepId, async () => {
         const gathered = await gatherFacts({ db, caseId, now: new Date() });
-        if (!gathered) return { disposition: 'aborted' as const, note: 'case vanished', retryAt: null };
+        // Every field the normal return carries, so the two shapes are one type
+        // and the abort branch below can read `failed` without narrowing.
+        if (!gathered) {
+          return {
+            disposition: 'aborted' as const,
+            note: 'case vanished',
+            suppressedReason: null,
+            channel: null,
+            retryAt: null,
+            failed: null,
+            paidAmountPaise: null,
+            paidConfirmed: false,
+          };
+        }
 
         // This merchant's own account. Resolved here rather than inside the
         // executor: the workflow is where the merchant is unambiguous, and an
@@ -160,6 +183,12 @@ export const runLadder = inngest.createFunction(
           suppressedReason: r.suppressedReason,
           channel: r.channel,
           retryAt: r.retryAt?.toISOString() ?? null,
+          // Carried out of the step so the abort branch below can end the case
+          // in the state that is actually true. Without it every abort looked
+          // identical and was recorded as `already_paid`.
+          failed: r.gate.failed,
+          paidAmountPaise: gathered.paidAmountPaise,
+          paidConfirmed: gathered.paidConfirmed,
         };
       });
 
@@ -176,6 +205,36 @@ export const runLadder = inngest.createFunction(
 
       let outcome = await attempt(i, rung, `rung-${i}`);
       results.push({ rung: i, ...outcome });
+
+      /*
+       * The merchant paused the agent while this case was in flight.
+       *
+       * Park it and end the run. NOT an abort — the case keeps its rung, its
+       * deadline and its ledger, and `claimPausedCaseForResume` starts a fresh
+       * run from exactly here when someone switches the account back to live.
+       *
+       * Ending the run rather than sleeping is deliberate. A pause has no known
+       * end, so a durable run waiting one out would either wake uselessly for
+       * weeks or exhaust its deferral budget and abandon a case that was only
+       * ever paused.
+       */
+      if (outcome.disposition === 'paused') {
+        await step.run(`pause-${i}`, async () => {
+          const moved = await transitionCase(db, caseId, 'paused', 'paused_by_merchant', {
+            actor: 'workflow',
+          });
+          await appendEvent(db, {
+            caseId,
+            merchantId,
+            kind: 'ladder_paused',
+            reason: 'execution_paused',
+            actor: 'workflow',
+            payload: { rung: i, moved: moved.ok },
+          });
+          return { paused: moved.ok };
+        });
+        return { caseId, outcome: 'paused', at: i, results };
+      }
 
       /**
        * Wait out a deferral for as long as the case is alive.
@@ -237,11 +296,28 @@ export const runLadder = inngest.createFunction(
       }
 
       if (outcome.disposition === 'aborted') {
-        await step.run(`abort-${i}`, async () => {
-          await transitionCase(db, caseId, 'aborted', 'already_paid', { actor: 'workflow' });
-          return { aborted: true };
-        });
-        return { caseId, outcome: 'aborted', at: i, results };
+        /*
+         * End the case as what it actually is.
+         *
+         * This branch used to hard-code `aborted` / `already_paid` for every
+         * abort the gate could produce. The money arriving, the deadline
+         * passing and the customer opting out all landed in the same state
+         * with the same reason, and a case whose payment link had just been
+         * paid was recorded as an abort with no recovered amount against it —
+         * so the one outcome this product exists to produce was the one it
+         * could not report. See `closeCaseFromGate`.
+         */
+        const closed = await step.run(`close-${i}`, async () =>
+          closeCaseFromGate(db, {
+            caseId,
+            merchantId,
+            failed: outcome.failed,
+            note: outcome.note,
+            paidAmountPaise: outcome.paidAmountPaise,
+            paidConfirmed: outcome.paidConfirmed,
+          }),
+        );
+        return { caseId, outcome: closed.outcome, reason: closed.reason, at: i, results };
       }
     }
 

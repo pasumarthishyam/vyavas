@@ -72,7 +72,7 @@ consequences, and they are the point:
 | 3 | Persistence — Drizzle schema, advisory locks, webhook dedupe | ✅ done |
 | 4 | Razorpay adapter + Ingest | ✅ done |
 | 5 | Read-only Revenue-at-Risk dashboard → **ship to partners** | ✅ done |
-| 6 | Execute (Inngest), dry-run only | ✅ done |
+| 6 | Execute (Inngest), bounded | ✅ done |
 | 7 | Channels — WhatsApp + email, live | ✅ done |
 | 8 | Claude — escalation queue, merchant alerts, triage, self-audit | ✅ done |
 | 9 | Measure + Partner OAuth | next |
@@ -111,6 +111,21 @@ npm run templates:status       # Meta review status for the 9 templates
 npm run templates:submit       # create any that are missing
 npm run send:test -- --to=91XXXXXXXXXX   # one real message, end to end
 
+npm run user -- create --email you@example.com --password '…'   # the FIRST account
+npm run user -- list
+npm run user -- password --email you@example.com --password '…' # signs out everywhere
+npm run user -- grant  --email you@example.com --slug <merchant>
+npm run user -- revoke --email you@example.com --slug <merchant>
+
+# Scripts that take flags are run with npx, NOT `npm run` — see the note below.
+npx tsx scripts/merchant.ts list
+npx tsx scripts/merchant.ts mode --slug <merchant> --set paused   # park cases
+npx tsx scripts/merchant.ts mode --slug <merchant> --set live
+
+npx tsx scripts/simulate.ts --list                        # the failure scenarios
+npx tsx scripts/simulate.ts --slug sandbox --scenario card_expired
+npx tsx scripts/simulate.ts --slug sandbox --order <orderId> --paid
+
 npm run queue                  # the escalation queue — cases waiting on a person
 npm run queue -- --escalate=<caseId>     # queue a real case NOW, with a real brief
 npm run queue -- --ack=<id> --by=<name>
@@ -146,6 +161,182 @@ are all 400s — and TypeScript, zod and the unit tests all say yes to a schema
 the API rejects. In production that 400 becomes a fallback, and the fallback
 looks exactly like "no API key set". One live run is the only thing that tells
 them apart. A unit test guards the schemas offline; this proves the round trip.
+
+### Signing in
+
+The console is behind authentication. Two things are needed before anyone can
+open it, and the order matters:
+
+```bash
+# 1. A signing secret, in .env.local AND in the deployment environment.
+node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
+
+# 2. The account. There is no sign-up page anywhere in the app — a public URL
+#    with a sign-up form is a public URL anyone can get an account on.
+npm run user -- create --email you@example.com --password '…' --name 'Your Name'
+```
+
+`create` maps **every existing merchant** to the new account, because a
+deployment that has been running without a login belongs to whoever is creating
+the first account. Pass `--no-claim` for later users and `grant` them one
+account at a time.
+
+**Without `SESSION_SECRET` the app refuses every request** rather than letting
+them through. A missing secret means no token can be verified, and the safe
+reading of that is "nobody is signed in", never "everybody is".
+
+`src/middleware.ts` is the gate, and **its location is part of the feature**.
+This project has a `src` directory, so Next.js looks for middleware beside
+`app/`. A middleware at the repository root is silently ignored — no error, no
+warning, `next build` succeeds and every page serves to anyone. The tell is the
+absence of a `Middleware` line in the build output:
+
+```bash
+npm run build | grep Middleware
+# ƒ Middleware    33.1 kB     <- registered
+# (nothing)                   <- NOT registered; the app is wide open
+```
+
+Public paths are listed explicitly in that file: the Razorpay, WhatsApp, Vapi
+and abandoned-cart webhooks, the Inngest endpoint, and `/api/health`. Each has
+its own authentication. Everything else needs a session, and a new page added
+later is protected by default.
+
+### Running it locally, so ladders actually run
+
+Two environment facts, and without either one no rung ever fires. Both fail
+quietly in a way that looks like the gate deferring rather than a broken setup.
+
+```bash
+INNGEST_DEV=1 npm run dev        # terminal 1
+npm run dev:inngest              # terminal 2 — point -u at your dev port
+```
+
+**`INNGEST_DEV=1` is required.** The SDK defaults to cloud mode and refuses to
+serve without a signing key, so `/api/inngest` answers 500 and no function is
+ever invoked. Check it with `curl localhost:3000/api/inngest` — you want
+`"mode":"dev"` and a non-zero `function_count`.
+
+**`APP_URL` must not be the production host while developing.** The Inngest
+route pins its callback origin to `APP_URL` for a real production reason (the
+Vercel apex→www redirect), and that pin is now disabled in dev — without that
+fix a local dev server registered `https://www.vyavas.com/api/inngest`, so every
+locally triggered run executed against the LIVE SITE and came back 401. The
+local Next log showed nothing at all, because nothing ever reached it.
+
+**Never run `npm run build` while `npm run dev` is up.** They share `.next`, and
+the build rewrites the chunk files under the running dev server. The result is a
+burst of `MODULE_NOT_FOUND` on `_document.js` and `./vendor-chunks/*.js` plus
+`Cannot read properties of undefined (reading '/_app')`, and every page 500s.
+Nothing is corrupted permanently:
+
+```bash
+# stop the dev server first, then
+rm -rf .next && npm run dev
+```
+
+### Where a real Razorpay webhook actually goes
+
+**Razorpay cannot reach your laptop.** Every delivery goes to the URL configured
+in the Razorpay dashboard, which is the deployed site. So paying a test link
+while `npm run dev` is running does not touch your dev server at all: the event
+lands on production, and production is the code that decides what happens to it.
+
+That has one consequence worth internalising, because it looks exactly like a
+bug in the thing you are working on:
+
+> A fix that is not deployed does not exist, however green your local tests are.
+> The payment arrives, production handles it with the old code, and your local
+> console shows nothing — because both are reading the same database and only
+> one of them ran.
+
+Three ways to work with that:
+
+- **`npx tsx scripts/simulate.ts --url http://localhost:3000`** posts a properly
+  signed payload straight at your dev server. No tunnel, no dashboard change.
+- **A tunnel** (`cloudflared tunnel --url http://localhost:3000`) with the
+  Razorpay TEST-mode webhook pointed at it, when you want the real thing.
+- **Deploy**, and test against production with the Sandbox merchant.
+
+### When a delivery gets stranded
+
+The webhook endpoint CLAIMS a delivery before processing it, which is what makes
+an at-least-once delivery safe to receive twice. The cost is that a claim
+outlives the process that made it: if the function dies between the claim and
+the "processed" mark, the row sits marked as seen, dedupe turns Razorpay's own
+retry into a no-op, and the event is lost silently — with no error recorded,
+because whatever would have recorded one died too.
+
+`sweep-deadlines` redrives every fifteen minutes in production. On demand:
+
+```bash
+npx tsx scripts/redrive.ts --dry     # what is stuck
+npx tsx scripts/redrive.ts           # reprocess it
+npx tsx scripts/redrive.ts --publish # ...and restart ladders for failures
+```
+
+`--publish` is off by default because reprocessing a `payment.failed` starts a
+ladder, and a terminal is the wrong place to do that by accident. Success events
+(`order.paid`, `payment_link.paid`) only ever close cases, so clearing a backlog
+of those needs no publisher.
+
+### Testing it, with no real failures to work from
+
+You cannot test a recovery agent without a failed payment, and Razorpay will not
+fail one on request. Test mode gives you declining cards, but driving a checkout
+by hand for every scenario is slow, and several of the interesting cases (a bank
+outage, a risk decline, a third wrong OTP) cannot be produced from a card number
+at all.
+
+```bash
+npx tsx scripts/simulate.ts --slug sandbox --scenario card_expired
+```
+
+**Use `npx tsx`, not `npm run`, for anything that takes flags.** On PowerShell
+npm claims `--slug` as one of its own boolean options, sets `npm_config_slug=true`
+and passes the bare value through as a positional — so the script reads `true`
+as the merchant name and reports `No merchant 'true'`. Both scripts now detect
+that and print the working command, but the direct form always works.
+
+That signs a real Razorpay-shaped payload with the merchant's **own** stored
+webhook secret and POSTs it to the merchant's **own** endpoint. Nothing is
+stubbed and nothing is bypassed: the signature is verified, the delivery is
+claimed and deduped, the tuple is normalised, `diagnose()` runs, a policy row is
+stamped, the case is created and the ladder is published. It is the path a live
+delivery takes, because it is that path.
+
+Two rails on it. It **refuses a merchant connected in live mode**, because a
+fabricated failure on a live account creates a real case about a customer whose
+payment never failed, and the agent will then message them. And it never writes
+to the database directly — a script that inserted cases would prove the console
+renders and nothing else.
+
+The full loop:
+
+```bash
+npx tsx scripts/simulate.ts --list                                   # every scenario
+npx tsx scripts/simulate.ts --slug sandbox --scenario incorrect_otp  # make a case
+npx tsx scripts/simulate.ts --slug sandbox --order <orderId> --paid  # close it
+npx tsx scripts/simulate.ts --slug sandbox --link-paid --reference <caseId>
+```
+
+Then watch `/recovery`: the case appears with its cause class and the ladder it
+was stamped with, the rungs fire, and closing it moves the **Recovered** tile.
+`--link-paid` is the one worth exercising deliberately, because paying a recovery
+link is the outcome the whole product exists to produce and the path most likely
+to regress.
+
+Two things to know before the first run:
+
+- **Locally, the ladder needs Inngest.** Publishing fails without
+  `INNGEST_EVENT_KEY`, so the case is created and diagnosed but no rung ever
+  fires. Run `npm run dev:inngest` alongside `npm run dev`, or point `--url` at
+  the deployment. The webhook reports the publish failure honestly rather than
+  swallowing it, and the redrive sweep retries.
+- **Holdout is on by default at 5%.** Roughly one simulated case in twenty will
+  deliberately send nothing and be marked `holdout`. If a case sits there having
+  done nothing, check that first. Set `holdout_basis_points` to 0 on a test
+  account.
 
 ### Database setup
 
@@ -250,6 +441,9 @@ The guarantees that matter are enforced by Postgres, not by application care:
 
 | Guarantee | Mechanism |
 |---|---|
+| Only signed-in people reach the console | HMAC-verified session cookie, checked in middleware |
+| A user only ever sees their own merchants | `merchant_members` join on every merchant lookup |
+| A paid recovery link closes its case | `payment_link.paid` resolved by `reference_id` |
 | One live case per order | partial unique index on live states |
 | A replayed rung never fires twice | unique `idempotency_key` on actions and messages |
 | A retried webhook is a no-op | `ON CONFLICT DO NOTHING … RETURNING` on the event id |
@@ -257,7 +451,7 @@ The guarantees that matter are enforced by Postgres, not by application care:
 | The cap is global per person, not per case | `message_log` keyed on `customer_id` |
 | Holdouts don't eat the treatment budget | partial index excluding suppressed rows |
 | One open alert per condition | partial unique index on unresolved alerts |
-| A new merchant sends nothing | `dry_run: true`, `execution_enabled: false` by default |
+| A new merchant sends nothing | `execution_enabled: false` by default, which means PAUSED |
 
 **Razorpay adapter** (`src/adapters/razorpay/`) — HMAC-SHA256 webhook
 verification over the raw bytes, an HTTP client that distinguishes retryable

@@ -61,7 +61,7 @@ const policy = (): PolicyRow => POLICY_TABLE.find((p) => p.id === 'instrument_de
 
 beforeEach(async () => {
   t = await createTestDb();
-  merchantId = await seedMerchant(t.db, { executionEnabled: true, dryRun: false });
+  merchantId = await seedMerchant(t.db, { executionEnabled: true });
   customerId = await seedCustomer(t.db, merchantId, { transactionalBasisAt: NOW });
 
   const [c] = await t.db
@@ -96,6 +96,15 @@ interface FireOpts {
   rails?: string[];
   retry?: boolean;
   channels?: SendChannels;
+  /**
+   * Override the rung itself.
+   *
+   * For behaviour that is real but that no row in the shipped table happens to
+   * exercise — channel fall-through, now that every rung lists at most one
+   * preferred channel. Taking the rung from the table by default keeps the rest
+   * of the file testing what actually ships.
+   */
+  rung?: PolicyRow['ladder'][number];
 }
 
 async function fire(over: FireOpts = {}) {
@@ -105,7 +114,7 @@ async function fire(over: FireOpts = {}) {
     caseId,
     merchantId,
     rungIndex: over.rungIndex ?? 0,
-    rung: policy().ladder[over.rungIndex ?? 0]!,
+    rung: over.rung ?? policy().ladder[over.rungIndex ?? 0]!,
     policy: policy(),
     gathered: gathered!,
     cohort: over.cohort ?? 'treatment',
@@ -159,23 +168,37 @@ describe('the two reasons a rung still does not send', () => {
     expect(msg!.body).toContain('Hi ');
   });
 
-  it('dry_run: the merchant has not switched execution on', async () => {
+  it('paused: the merchant has switched the agent off, and the case is PARKED', async () => {
     await t.db
       .update(schema.merchants)
-      .set({ dryRun: true })
+      .set({ executionEnabled: false })
       .where(eq(schema.merchants.id, merchantId));
 
     const wa = fakeWhatsApp();
     const r = await fire({ channels: { whatsapp: wa.client } });
 
-    expect(r.suppressedReason).toBe('dry_run');
+    // A pause is not a suppression and not an abort. Nothing is built, nothing
+    // is written, nothing is sent — the case simply stops where it stands so
+    // that resuming can pick it up at this same rung.
+    expect(r.disposition).toBe('paused');
+    expect(r.suppressedReason).toBeNull();
+    expect(r.action).toBeNull();
     expect(wa.sent).toHaveLength(0);
+
+    // No action row, so the rung is genuinely un-run rather than recorded as
+    // done. If one were written, resuming would skip this rung as a replay and
+    // the customer would never hear from us.
+    const actions = await t.db.select().from(schema.caseActions);
+    expect(actions).toHaveLength(0);
   });
 
-  it('keeps the two apart', async () => {
-    // A dry-run case is not a control — it is a case nobody was treated in.
-    // Collapsing them would make the incrementality report a guess.
+  it('keeps a holdout apart from a pause', async () => {
+    // A holdout is a treated-population control that ran the whole ladder and
+    // deliberately sent nothing, so it IS recorded. A pause is a case nobody
+    // was treated in. Counting the second as the first would make the
+    // incrementality report a guess.
     const a = await fire({ cohort: 'holdout', channels: { whatsapp: fakeWhatsApp().client } });
+    expect(a.disposition).toBe('suppressed');
     expect(a.suppressedReason).toBe('holdout');
   });
 });
@@ -275,13 +298,14 @@ describe('the gate runs before anything else', () => {
     expect(wa.sent).toHaveLength(0);
   });
 
-  it('aborts when the merchant kill switch is off', async () => {
+  it('parks the case when the merchant has paused the agent', async () => {
     await t.db
       .update(schema.merchants)
       .set({ executionEnabled: false })
       .where(eq(schema.merchants.id, merchantId));
     const r = await fire({ channels: { whatsapp: fakeWhatsApp().client } });
-    expect(r.gate.failed).toBe('execution_disabled');
+    expect(r.disposition).toBe('paused');
+    expect(r.gate.failed).toBe('execution_paused');
   });
 
   it('defers rather than interrupting a live attempt', async () => {
@@ -354,15 +378,32 @@ describe('the diagnosis overrules the policy table', () => {
 });
 
 describe('channel selection', () => {
-  it('falls through to the next consented channel', async () => {
+  it('falls through to the next channel the rung lists', async () => {
+    // Consented to email only. The rung prefers WhatsApp, cannot have it, and
+    // must take the next entry rather than giving up on the touch.
     await t.db
       .update(schema.customers)
-      .set({ transactionalBasisAt: null, smsOptIn: true, whatsappOptIn: false })
+      .set({ transactionalBasisAt: null, whatsappOptIn: false, emailOptIn: true })
+      .where(eq(schema.customers.id, customerId));
+
+    const r = await fire({
+      rung: { at: '4m', action: 'nudge', channels: ['whatsapp', 'email'], intent: 'reminder', attachPaymentLink: false, fanout: false },
+      channels: { whatsapp: fakeWhatsApp().client },
+    });
+    expect(r.channel).toBe('email');
+  });
+
+  it('skips a rung whose only channel the customer cannot receive on', async () => {
+    // The shipped ladders list one preferred channel per rung, so this is the
+    // ordinary shape of the problem. The rung is skipped and says why; it is
+    // NOT an abort, because a later rung on another channel may still land.
+    await t.db
+      .update(schema.customers)
+      .set({ transactionalBasisAt: null, whatsappOptIn: false, emailOptIn: true })
       .where(eq(schema.customers.id, customerId));
     const r = await fire({ channels: { whatsapp: fakeWhatsApp().client } });
-    expect(r.channel).toBe('sms');
-    // SMS is deferred until DLT — reported honestly rather than silently dropped.
-    expect(r.note).toContain('not implemented');
+    expect(r.disposition).toBe('skipped');
+    expect(r.note).toContain('no eligible channel');
   });
 
   it('aborts when the customer has no reachable channel at all', async () => {

@@ -28,6 +28,18 @@ export interface PreconditionFacts {
 
   /** Re-fetched from Razorpay, never read from our own row. */
   readonly orderPaid: boolean;
+  /**
+   * The RECOVERY LINK this case created has been paid.
+   *
+   * A separate fact from `orderPaid`, and it has to be. A Razorpay payment link
+   * creates its own order when it is paid, so a customer who pays through the
+   * link we sent them leaves the ORIGINAL order sitting at `created` forever —
+   * `orderPaid` keeps answering "no" and every remaining rung fires at someone
+   * who has already paid. The `payment_link_paid` abort condition has been
+   * listed on every customer-facing row in the policy table since Stage 2 with
+   * nothing behind it; this is that fact.
+   */
+  readonly paymentLinkPaid: boolean;
   readonly deadlinePassed: boolean;
 
   readonly customerOptedOut: boolean;
@@ -98,11 +110,43 @@ export interface PreconditionFacts {
   readonly executionEnabled: boolean;
 }
 
-export type Disposition = 'proceed' | 'defer' | 'abort';
+/**
+ * `paused` is separate from `abort` and from `defer`, and it has to be.
+ *
+ * An abort is terminal, so treating a paused merchant as an abort destroyed
+ * every case in flight the moment someone pressed the switch — that was the
+ * behaviour, and turning the account back on recovered none of them.
+ *
+ * A defer is not right either: a defer names a time to try again, and a pause
+ * has no such time. It ends when a person decides it ends, which might be an
+ * hour or a month. Parking a durable run on a guessed retry time either wakes
+ * it uselessly all week or gives up before the pause is over.
+ *
+ * So pause is its own answer: park the case in `paused`, end the run, and let
+ * the resume path start a fresh one from the same rung.
+ */
+export type Disposition = 'proceed' | 'defer' | 'abort' | 'paused';
+
+/**
+ * Why the gate stopped or delayed a rung.
+ *
+ * Mostly the name of the precondition that failed, plus four outcomes that are
+ * not preconditions at all. The last three used to be reported as
+ * `order_unpaid` between them, which made the caller unable to tell "the money
+ * arrived" from "we ran out of time" — so the ladder marked BOTH as `aborted`
+ * with reason `already_paid`, and a recovered case was recorded as an abort
+ * with no recovered amount against it.
+ */
+export type GateFailure =
+  | Precondition
+  | 'execution_paused'
+  | 'order_paid'
+  | 'payment_link_paid'
+  | 'deadline_passed';
 
 export interface GateResult {
   readonly disposition: Disposition;
-  readonly failed: Precondition | 'execution_disabled' | null;
+  readonly failed: GateFailure | null;
   readonly reason: string;
   /** Set when deferring: the earliest instant worth trying again. */
   readonly retryAt: Date | null;
@@ -129,6 +173,14 @@ const defer = (failed: GateResult['failed'], reason: string, retryAt: Date): Gat
   retryAt,
 });
 
+/** No `retryAt`: a pause ends when a person ends it, not at a time we can name. */
+const paused: GateResult = {
+  disposition: 'paused',
+  failed: 'execution_paused',
+  reason: 'the merchant has paused this agent',
+  retryAt: null,
+};
+
 const MINUTE = 60_000;
 const HOUR = 3_600_000;
 
@@ -143,11 +195,18 @@ export function evaluatePreconditions(
   required: readonly Precondition[],
   facts: PreconditionFacts,
 ): GateResult {
-  // The kill switch outranks every ladder and is not a precondition a policy
-  // can opt out of.
-  if (!facts.executionEnabled) {
-    return abort('execution_disabled', 'merchant execution is switched off');
-  }
+  // ── the pause ──
+  //
+  // Checked first, and it outranks every ladder — a paused agent does nothing,
+  // whatever any policy row says. But it is not an abort: the case is parked,
+  // not ended, and resuming picks it up at the same rung.
+  //
+  // Ordered ABOVE the paid checks deliberately. Those two do reach the ledger
+  // (they mark a case recovered), and a paused agent should not be writing
+  // outcomes. A payment that lands during a pause is picked up by the webhook
+  // and by the reconciliation sweep regardless, so nothing is missed by
+  // declining to notice it here.
+  if (!facts.executionEnabled) return paused;
 
   // ── aborts ──
 
@@ -155,11 +214,18 @@ export function evaluatePreconditions(
   // someone who has already paid is the mistake that ends the relationship, and
   // it must not be possible to opt out of noticing.
   if (facts.orderPaid) {
-    return abort('order_unpaid', 'the order has been paid — nothing is at risk');
+    return abort('order_paid', 'the order has been paid — nothing is at risk');
+  }
+
+  // Checked unconditionally alongside `orderPaid`, and for the same reason. The
+  // customer paid on the link we sent them, which is the ladder working; the
+  // original order will never say so.
+  if (facts.paymentLinkPaid) {
+    return abort('payment_link_paid', 'the recovery link has been paid — nothing is at risk');
   }
 
   if (facts.deadlinePassed) {
-    return abort('order_unpaid', 'the deadline has passed — this case is closed');
+    return abort('deadline_passed', 'the deadline has passed — this case is closed');
   }
 
   if (facts.customerOptedOut) {

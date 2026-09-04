@@ -26,7 +26,7 @@
   ladder:
     - at: 0m
       action: send_pre_debit_notice
-      channels: [whatsapp, sms]
+      channels: [whatsapp]
       leadTime: 24h
       note: RBI pre-debit notification. Must precede the re-presentment.
     - at: 25h
@@ -43,7 +43,7 @@
         bothering the customer is the highest-value outcome available.
     - at: 3d
       action: send_pre_debit_notice
-      channels: [whatsapp, sms]
+      channels: [whatsapp]
       leadTime: 24h
     - at: 4d
       action: retry_debit
@@ -67,7 +67,7 @@
   ladder:
     - at: 25m
       action: nudge
-      channels: [whatsapp, sms]
+      channels: [whatsapp]
       intent: subscription_at_risk
       note: >
         No `suggest` — inherit the diagnosis rails, which already exclude

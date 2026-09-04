@@ -131,11 +131,22 @@ regardless of when:
 | Condition | Why it is terminal |
 |---|---|
 | `orderPaid` | Checked unconditionally, even if the policy forgot to list it. The one mistake that ends the relationship must not be opt-out-able |
+| `paymentLinkPaid` | Also unconditional. A payment link creates its **own** order when it is paid, so the original order stays `created` forever and `orderPaid` never notices — the customer pays and keeps getting messaged |
 | `deadlinePassed` | Intent has decayed past the point of recovery |
 | `customerOptedOut` | Global and immediate |
 | `mandateActive: false` | Re-presenting would fail and is not permitted |
 | No deliverable channel | No amount of waiting produces a phone number we never had |
-| `executionEnabled: false` | The merchant kill switch. Outranks every ladder |
+
+**PAUSE** — its own disposition, and neither of the above:
+
+| Condition | What happens |
+|---|---|
+| `executionEnabled: false` | The case is parked in `paused`, keeping its rung, deadline and ledger, and the run ends. Resuming starts a fresh run from the same rung |
+
+Pause used to be an abort, and an abort is terminal — so pausing an account
+destroyed every case in flight and switching back recovered none of them. It is
+not a defer either: a defer names a time to try again, and a pause ends when a
+person ends it, which might be an hour or a month.
 
 **DEFER** — the reason is about *right now*:
 
@@ -184,6 +195,21 @@ There are **9 templates**, one per message intent, all category UTILITY. The
 moment one carries a discount it becomes MARKETING: different consent, worse
 delivery, higher cost. None mentions one.
 
+### Two channels, and only two
+
+WhatsApp and email. A ladder cannot name anything else: the policy schema
+validates a rung's `channels` against `SENDABLE_CHANNELS`, so `sms` is a build
+failure rather than a runtime shrug.
+
+That check exists because the alternative was invisible. Eighteen rungs across
+the table listed `sms`, there has never been an SMS client (transactional SMS in
+India needs DLT registration of the sender and every template), and the failure
+mode was silent: `send.ts` answered `no_channel`, `selectChannel` fell through
+to the next entry, and a rung whose only channel was `sms` reported "no eligible
+channel" and lost the touch. Worse, `gatherFacts` counted `sms` as an eligible
+channel, so a customer with a phone number and no email passed
+`channel_deliverable` and was never actually reachable.
+
 ### Fanout: one rung, two channels
 
 Most rungs pick **one** channel from the policy's preference list. A rung marked
@@ -208,20 +234,21 @@ spends two slots at once.**
 
 ---
 
-## Two ways a rung does not send
-
-These are **not** the same thing, and collapsing them would make the
-incrementality report meaningless:
+## One way a rung runs and still does not send
 
 - **holdout** — a real control group. Runs the identical ladder through the
   identical gate, sends nothing, and is the only honest way to know what the
   treatment was worth. Cohort assignment is deterministic and stable under rate
   changes, so historical numbers stay valid.
-- **dry_run** — the merchant has not turned execution on yet. A dry-run case is
-  not a control; it is a case nobody was ever treated in.
 
 Suppression happens **after** the gate on purpose, so a holdout case is gated
 identically to a treatment case and the two groups stay comparable.
 
-A new merchant sends nothing: `dry_run: true` and `execution_enabled: false` are
-the database defaults.
+There used to be a second reason, `dry_run`, for a merchant who had not switched
+sending on. It went with the three-state send mode: an account is now paused or
+live, and a paused account never reaches the executor at all — the gate parks
+the case first. Keeping the two apart mattered while both existed, because a
+dry-run case is not a control, it is a case nobody was ever treated in.
+
+A new merchant sends nothing: `execution_enabled: false` is the database
+default, and that means PAUSED.

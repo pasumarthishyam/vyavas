@@ -1,18 +1,18 @@
-import { getDb } from '../../../db/client';
-import { selectMerchant } from '../../../lib/merchant-context';
-import { getMerchant } from '../../../db/queries/dashboard';
+import { getDb } from '../../../../db/client';
+import { selectMerchant } from '../../../../lib/merchant-context';
+import { getMerchant } from '../../../../db/queries/dashboard';
 import {
   getAbandonedCartSummary,
   getRecentAbandonedCarts,
-} from '../../../db/queries/abandoned-cart-agent';
-import { getAbandonedCartApiKey } from '../../../db/repos/abandoned-cart-auth';
-import { appUrl } from '../../../lib/env';
-import { resolveDateRange } from '../../../lib/date-range';
-import { Empty } from '../../../components/charts';
-import { Alert, Delta, Stat, inr } from '../../../components/ui';
-import { DateRangeFilter } from '../../../components/date-range-filter';
-import { AbandonedCartConsole } from '../../../components/abandoned-cart-console';
-import { AbandonedCartIntegrationCard } from '../../../components/abandoned-cart-integration-card';
+} from '../../../../db/queries/abandoned-cart-agent';
+import { getAbandonedCartApiKey } from '../../../../db/repos/abandoned-cart-auth';
+import { appUrl } from '../../../../lib/env';
+import { resolveDateRange } from '../../../../lib/date-range';
+import { Empty } from '../../../../components/charts';
+import { Alert, Delta, Stat, inr } from '../../../../components/ui';
+import { DateRangeFilter } from '../../../../components/date-range-filter';
+import { AbandonedCartConsole } from '../../../../components/abandoned-cart-console';
+import { AbandonedCartIntegrationCard } from '../../../../components/abandoned-cart-integration-card';
 
 export const dynamic = 'force-dynamic';
 
@@ -72,11 +72,23 @@ export default async function AbandonedCartPage({
   // Read-only, unlike `/recovery`'s switch: this agent's send mode is the
   // merchant's, set there. Shown in the same box so the two pages agree about
   // what "Live" looks like.
-  const mode = !merchant.executionEnabled ? 'off' : merchant.dryRun ? 'dry_run' : 'live';
+  const mode = merchant.executionEnabled ? 'live' : 'paused';
+  const emailDiverted = Boolean(merchant.emailRedirectTo);
   const MODE_COPY = {
-    off: { label: 'Off', hint: 'Carts are recorded, nothing is emailed', dot: 'var(--ink-muted)' },
-    dry_run: { label: 'Dry run', hint: 'Links are created, nothing is emailed', dot: 'var(--data)' },
-    live: { label: 'Live', hint: '₹200 off, 24h link, email only', dot: 'var(--good)' },
+    paused: {
+      label: 'Paused',
+      hint: 'Carts are recorded, nothing is emailed',
+      dot: 'var(--ink-muted)',
+    },
+    live: {
+      label: 'Live',
+      // The hint used to promise "email only" whatever the routing said, which
+      // read as "the customer gets an email" on an account where every message
+      // is diverted to a test inbox. Same fix as the status column below: say
+      // where it actually goes.
+      hint: emailDiverted ? '₹200 off, 24h link, email diverted' : '₹200 off, 24h link, email only',
+      dot: emailDiverted ? 'var(--warning)' : 'var(--good)',
+    },
   } as const;
 
   return (
@@ -145,6 +157,49 @@ export default async function AbandonedCartPage({
         <Delta pct={summary.deltaPct} />
       </div>
 
+      {/* Where email on this account actually goes. The same banner `/recovery`
+          carries, for the same reason: every "sent" below means nothing until
+          you know whether it went to the customer or to a test inbox. */}
+      <div className={`notice${mode === 'live' && !emailDiverted ? ' notice-critical' : ''}`}>
+        <InfoIcon />
+        <span>
+          <strong style={{ fontWeight: 550 }}>Email</strong>{' '}
+          {mode !== 'live' ? (
+            <>
+              is not being sent — this account is <strong style={{ fontWeight: 550 }}>paused</strong>
+              . Carts are still recorded.
+            </>
+          ) : emailDiverted ? (
+            <>
+              → <span className="mono">{merchant.emailRedirectTo}</span>, never the customer.
+            </>
+          ) : (
+            <>
+              → the <strong style={{ fontWeight: 550 }}>real customer address</strong>
+              {merchant.emailFrom ? (
+                <>
+                  {' '}
+                  from <span className="mono">{merchant.emailFrom}</span>
+                </>
+              ) : null}
+              . Real people receive these.
+            </>
+          )}
+        </span>
+      </div>
+
+      {mode !== 'live' && (
+        <div className="notice">
+          <InfoIcon />
+          <span>
+            Paused, so a cart reported now is recorded and left alone — and unlike a recovery case,
+            it is <strong style={{ fontWeight: 550 }}>not picked up again</strong> when you switch to
+            Live. Emailing someone about a cart they abandoned days ago is worse than not emailing
+            them. Re-post the same <span className="mono">cartId</span> to process it.
+          </span>
+        </div>
+      )}
+
       {summary.failedCount > 0 && (
         <div style={{ marginBottom: 20 }}>
           <Alert
@@ -155,12 +210,37 @@ export default async function AbandonedCartPage({
         </div>
       )}
 
-      <AbandonedCartConsole carts={carts} />
+      {summary.notDeliveredCount > 0 && (
+        <div style={{ marginBottom: 20 }}>
+          <Alert
+            severity="warning"
+            title={`${summary.notDeliveredCount} cart${summary.notDeliveredCount === 1 ? ' has' : 's have'} a live payment link nobody was told about`}
+            body="The link was created but the email did not go out — a customer already at their daily message limit, an address the provider rejected, or no email channel on this account. The Email column says which, per cart."
+          />
+        </div>
+      )}
+
+      <AbandonedCartConsole
+        carts={carts}
+        paused={mode !== 'live'}
+        emailRedirectTo={merchant.emailRedirectTo}
+      />
 
       {/* Setup, folded away. It used to be a 300px sticky aside beside the
           metrics, which is where the page's horizontal overflow came from —
           a bearer token and a full webhook URL do not fit in 300px. */}
       <AbandonedCartIntegrationCard endpoint={endpoint} apiKey={apiKey} />
     </>
+  );
+}
+
+/** Same glyph the recovery console's notices use — copied rather than imported
+ *  so this server component does not pull a client module in for an svg. */
+function InfoIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M8 7.2v4M8 4.9h.01" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
   );
 }

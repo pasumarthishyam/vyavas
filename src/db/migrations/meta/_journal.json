@@ -57,6 +57,27 @@
       "when": 1788280243930,
       "tag": "0007_spicy_jack_power",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1788461782123,
+      "tag": "0008_amusing_owl",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1788467945914,
+      "tag": "0009_wonderful_inhumans",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1788468159303,
+      "tag": "0010_vengeful_crystal",
+      "breakpoints": true
     }
   ]
 }

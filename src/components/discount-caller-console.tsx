@@ -234,15 +234,28 @@ export function DiscountCallerConsole({
                     </td>
                     <td className="muted nowrap">{relativeTime(new Date(c.createdAt))}</td>
                     <td className="row-action">
-                      <button
-                        type="button"
-                        className="btn-primary btn-sm"
-                        disabled={webCall !== null}
-                        onClick={() => void startWebCall(c.id)}
-                        title="Talk to the agent through your browser's microphone — no phone, no carrier involved."
-                      >
-                        Web call
-                      </button>
+                      {/*
+                        A blocked case is SHOWN with its reason rather than hidden.
+                        An operator looking for a case they know exists should find
+                        it and be told why it is unavailable, not conclude the list
+                        is broken. The route enforces the same two rules server-side,
+                        because a disabled button is a courtesy and not a control.
+                      */}
+                      {c.blockedReason ? (
+                        <span className="muted nowrap" title={c.blockedReason}>
+                          {c.state === 'paused' ? 'Paused' : `${c.ageDays}d old`}
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          className="btn-primary btn-sm"
+                          disabled={webCall !== null}
+                          onClick={() => void startWebCall(c.id)}
+                          title="Talk to the agent through your browser's microphone — no phone, no carrier involved."
+                        >
+                          Web call
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}

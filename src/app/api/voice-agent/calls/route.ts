@@ -3,6 +3,9 @@ import { NextResponse } from 'next/server';
 import { getDb } from '../../../../db/client';
 import { appendEvent, getCase } from '../../../../db/repos/cases';
 import { getCustomer } from '../../../../db/repos/customers';
+import { getMerchant } from '../../../../db/queries/dashboard';
+import { isTerminal } from '../../../../core/case/types';
+import { RESUME_MAX_AGE_DAYS } from '../../../../core/guards/resume';
 import { createVoiceCall, listRecentVoiceCalls } from '../../../../db/repos/voice-calls';
 import { currentMerchantId } from '../../../../lib/merchant-context';
 import { allowedTestNumbers, isAllowedTestNumber, requireVapiConfig, voiceAgentEnabled } from '../../../../lib/env';
@@ -42,6 +45,44 @@ export async function POST(request: Request): Promise<NextResponse> {
   const recoveryCase = await getCase(db, body.caseId);
   if (!recoveryCase || recoveryCase.merchantId !== merchantId) {
     return NextResponse.json({ ok: false, reason: 'case not found' }, { status: 404 });
+  }
+
+  /*
+   * The same two rules the ladder obeys, enforced here rather than assumed.
+   *
+   * This route checked neither, so a discount call could be placed on a case
+   * whose account was paused, or on one whose payment failed a fortnight ago —
+   * both of which the failed-payment agent refuses. A second agent that can
+   * reach the same customer must not be the way around the first one's gate.
+   *
+   * Read from the merchant and the case rather than from what the console sent:
+   * the button is disabled for these, and a disabled button is a courtesy, not
+   * a control.
+   */
+  const merchant = await getMerchant(db, merchantId);
+  if (!merchant?.executionEnabled) {
+    return NextResponse.json(
+      { ok: false, reason: 'this agent is paused for this account' },
+      { status: 409 },
+    );
+  }
+
+  if (isTerminal(recoveryCase.state)) {
+    return NextResponse.json(
+      { ok: false, reason: `this case is ${recoveryCase.state} — there is nothing to recover` },
+      { status: 409 },
+    );
+  }
+
+  const ageDays = Math.floor((Date.now() - recoveryCase.createdAt.getTime()) / 86_400_000);
+  if (ageDays > RESUME_MAX_AGE_DAYS) {
+    return NextResponse.json(
+      {
+        ok: false,
+        reason: `the payment failed ${ageDays} days ago — too long ago to call about`,
+      },
+      { status: 409 },
+    );
   }
 
   const customer = recoveryCase.customerId ? await getCustomer(db, recoveryCase.customerId) : null;

@@ -13,6 +13,7 @@ import { paiseFromColumn } from '../util.js';
 import { caseActions, caseEvents, recoveryCases } from '../schema/cases.js';
 import { customers } from '../schema/customers.js';
 import { merchants } from '../schema/tenancy.js';
+import { merchantMembers } from '../schema/auth.js';
 import { messageLog } from '../schema/messaging.js';
 import { merchantAlerts } from '../schema/ops.js';
 import { escalations } from '../schema/queues.js';
@@ -340,6 +341,14 @@ export const EVENT_CATEGORY: Readonly<Record<string, ActivityCategory>> = {
   rung_abandoned: 'decision',
   rung_uncomposable: 'decision',
   payment_link_created: 'decision',
+  // Parked because the merchant paused the agent. Both are `decision` rather
+  // than `system`: a case that is sitting still because someone pressed a
+  // button is the single most important thing to be able to see on its row, and
+  // without a lane here it did not reach the console at all — the row showed
+  // whatever older event happened to be on this allowlist, so a paused case
+  // looked like a case that had simply stopped for no stated reason.
+  rung_paused: 'decision',
+  ladder_paused: 'decision',
 
   // What Claude wrote, and who it went to.
   escalated: 'ai',
@@ -784,7 +793,6 @@ export interface ConsoleMerchant {
   id: string;
   name: string;
   executionEnabled: boolean;
-  dryRun: boolean;
   frequencyCapPerDay: number;
   quietHoursStart: number;
   quietHoursEnd: number;
@@ -821,7 +829,6 @@ export async function getConsoleMerchant(
     id: m.id,
     name: m.name,
     executionEnabled: m.executionEnabled,
-    dryRun: m.dryRun,
     frequencyCapPerDay: m.frequencyCapPerDay,
     quietHoursStart: m.quietHoursStart,
     quietHoursEnd: m.quietHoursEnd,
@@ -845,25 +852,35 @@ export async function getConsoleMerchant(
  * to the FIRST merchant, never to "all merchants". A console that silently
  * aggregated two accounts would make a Start click ambiguous about whose
  * customers were about to be messaged.
+ *
+ * ── the membership join is not optional ──
+ *
+ * `slug` comes from a cookie, which is set by the browser and therefore
+ * attacker-controlled. Without the join this function would happily hand back
+ * any merchant in the database to any signed-in user who edited one cookie
+ * value — every case, every masked contact, and the send-mode switch. The join
+ * costs nothing here because it is the same single query.
  */
 export async function getConsoleMerchantBySlug(
   db: Database,
   slug: string | null,
+  userId: string,
 ): Promise<ConsoleMerchant | null> {
   const rows = await db
-    .select()
+    .select({ m: merchants })
     .from(merchants)
-    .where(sql`deleted_at is null`)
+    .innerJoin(merchantMembers, eq(merchantMembers.merchantId, merchants.id))
+    .where(and(eq(merchantMembers.userId, userId), sql`${merchants.deletedAt} is null`))
     .orderBy(merchants.createdAt);
 
-  const m = (slug ? rows.find((r) => r.slug === slug) : undefined) ?? rows.at(0);
-  if (!m) return null;
+  const found = (slug ? rows.find((r) => r.m.slug === slug) : undefined) ?? rows.at(0);
+  if (!found) return null;
+  const m = found.m;
 
   return {
     id: m.id,
     name: m.name,
     executionEnabled: m.executionEnabled,
-    dryRun: m.dryRun,
     frequencyCapPerDay: m.frequencyCapPerDay,
     quietHoursStart: m.quietHoursStart,
     quietHoursEnd: m.quietHoursEnd,

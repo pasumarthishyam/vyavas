@@ -1,10 +1,10 @@
-import { getDb } from '../../../db/client';
-import { selectMerchant } from '../../../lib/merchant-context';
-import { getMerchant } from '../../../db/queries/dashboard';
-import { getCallableCases, getRecentVoiceCallRows } from '../../../db/queries/voice-agent';
-import { Empty } from '../../../components/charts';
-import { Stat, inr } from '../../../components/ui';
-import { DiscountCallerConsole } from '../../../components/discount-caller-console';
+import { getDb } from '../../../../db/client';
+import { selectMerchant } from '../../../../lib/merchant-context';
+import { getMerchant } from '../../../../db/queries/dashboard';
+import { getCallableCases, getRecentVoiceCallRows } from '../../../../db/queries/voice-agent';
+import { Empty } from '../../../../components/charts';
+import { Stat, inr } from '../../../../components/ui';
+import { DiscountCallerConsole } from '../../../../components/discount-caller-console';
 
 export const dynamic = 'force-dynamic';
 
@@ -33,7 +33,17 @@ export default async function DiscountCallerPage() {
     getRecentVoiceCallRows(db, merchant.id, 50),
   ]);
 
-  const callableAtRisk = cases.reduce((sum, c) => sum + c.amountPaise, 0);
+  /*
+   * "Callable" must mean callable.
+   *
+   * This summed every case with a phone number, including ones the agent is
+   * forbidden to ring — parked by a pause, or too old to call about. A tile
+   * that counts what you cannot do is worse than no tile: it is a number an
+   * operator plans around and then cannot act on.
+   */
+  const callable = cases.filter((c) => c.blockedReason === null);
+  const blocked = cases.length - callable.length;
+  const callableAtRisk = callable.reduce((sum, c) => sum + c.amountPaise, 0);
   const inFlight = calls.filter(
     (c) => c.status === 'queued' || c.status === 'ringing' || c.status === 'in_progress',
   ).length;
@@ -57,7 +67,10 @@ export default async function DiscountCallerPage() {
         <Stat
           label="Callable now"
           value={inr(callableAtRisk)}
-          foot={`${cases.length} case${cases.length === 1 ? '' : 's'} with a number on file`}
+          foot={
+            `${callable.length} case${callable.length === 1 ? '' : 's'} with a number on file` +
+            (blocked > 0 ? ` · ${blocked} held` : '')
+          }
         />
         <Stat
           label="Calls placed"

@@ -22,7 +22,7 @@
       note: Three-hour floor for this class. Anything sooner is nagging, not helping.
     - at: 26h
       action: nudge
-      channels: [whatsapp, sms]
+      channels: [whatsapp]
       intent: reminder
   preconditions:
     [order_unpaid, no_live_attempt, consent_ok, not_quiet_hours, within_frequency_cap, channel_deliverable]
@@ -47,11 +47,11 @@
       intent: switch_method
     - at: 26h
       action: nudge
-      channels: [whatsapp, sms]
+      channels: [whatsapp]
       intent: reminder
     - at: 3d
       action: nudge
-      channels: [email, sms]
+      channels: [email]
       intent: final_reminder
       note: >
         Third touch lands near the next common salary-credit window. Stage 6
@@ -75,7 +75,7 @@
   ladder:
     - at: 3h
       action: nudge
-      channels: [whatsapp, sms]
+      channels: [whatsapp]
       intent: switch_method
       suggest: [upi_intent, other_card]
       note: Immediate answer is a different rail, or splitting the payment.

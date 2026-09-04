@@ -11,13 +11,13 @@
 
 import type { Database } from '../db/client.js';
 import { getCustomer, upsertCustomer } from '../db/repos/customers.js';
-import { recordCartEmailSent } from '../db/repos/abandoned-carts.js';
+import { recordCartLinkIssued, type CartEmailStatus } from '../db/repos/abandoned-carts.js';
 import { razorpayForMerchant, channelsForMerchant } from './merchant-clients.js';
 import { createPaymentLink } from '../adapters/razorpay/resources.js';
 import { proposeCartDiscount } from '../core/guards/cart-discount.js';
 import { formatINR, paise, subPaise, type Paise } from '../core/money.js';
 import { compose } from '../messaging/compose.js';
-import { sendMessage } from '../messaging/send.js';
+import { sendMessage, type SendOutcome } from '../messaging/send.js';
 
 /** Razorpay's payment-link minimum. Below this there is nothing to pay. */
 const MIN_PAYABLE_PAISE = 100;
@@ -28,7 +28,6 @@ export interface ProcessCartInput {
   merchantId: string;
   merchantName: string;
   frequencyCapPerDay: number;
-  dryRun: boolean;
   amountPaise: number;
   customerName: string | null;
   customerEmail: string;
@@ -41,7 +40,11 @@ export type ProcessCartResult =
       discountAmountPaise: number;
       payableAmountPaise: number;
       paymentLinkUrl: string;
+      /** True only when an email genuinely left for the customer. */
       emailed: boolean;
+      /** What the send path did, and why, when it did not send. */
+      emailStatus: CartEmailStatus;
+      emailDetail: string | null;
     }
   | { ok: false; status: number; reason: string };
 
@@ -119,7 +122,23 @@ export async function processAbandonedCart(db: Database, input: ProcessCartInput
     paymentLink: url,
   });
 
-  let emailed = false;
+  /*
+   * The send, and what it actually did.
+   *
+   * Every branch below is a real outcome this agent has hit, and every one of
+   * them used to be recorded identically as "emailed": refused (this customer
+   * had already had their allowance of messages today), failed (Resend rejected
+   * the address), no_channel (no email credentials on the merchant at all). A
+   * console cannot be trusted about what it DID send if it cannot be honest
+   * about what it did not.
+   *
+   * `suppressed` is still in the union but is now unreachable from here. It
+   * covered the merchant being in a dry run, and dry run is gone — an account is
+   * paused or live, and a paused one never reaches this function.
+   */
+  let emailStatus: CartEmailStatus = 'not_composed';
+  let emailDetail: string | null = composed.ok ? null : 'could not compose the email for this cart';
+
   if (composed.ok) {
     const channels = await channelsForMerchant(db, input.merchantId);
     const outcome = await sendMessage({
@@ -135,22 +154,25 @@ export async function processAbandonedCart(db: Database, input: ProcessCartInput
       email: input.customerEmail,
       frequencyCap: input.frequencyCapPerDay,
       idempotencyKey: `abandoned-cart:${input.cartRowId}:email`,
-      // Nothing external happens under dry-run: the link above carries no
-      // notify flags so it never reached anyone on its own, and this is the
-      // one step that would.
-      suppressedReason: input.dryRun ? 'dry_run' : null,
+      // Never suppressed: the caller does not reach this function at all while
+      // the merchant is paused, so by here the send is meant to happen.
+      suppressedReason: null,
       channels,
     });
-    emailed = outcome.status === 'sent';
+
+    emailStatus = outcome.status;
+    emailDetail = describeOutcome(outcome);
   }
 
-  await recordCartEmailSent(db, input.cartRowId, {
+  await recordCartLinkIssued(db, input.cartRowId, {
     customerId,
     discountAmountPaise: discount.amountPaise,
     paymentLinkId: linkId,
     paymentLinkUrl: url,
     paymentLinkAmountPaise: payable,
     paymentLinkExpiresAt: expiresAt,
+    emailStatus,
+    emailDetail,
   });
 
   return {
@@ -158,6 +180,24 @@ export async function processAbandonedCart(db: Database, input: ProcessCartInput
     discountAmountPaise: discount.amountPaise,
     payableAmountPaise: payable,
     paymentLinkUrl: url,
-    emailed,
+    emailed: emailStatus === 'sent',
+    emailStatus,
+    emailDetail,
   };
+}
+
+/** The one-line why, kept in the send path's own words rather than re-invented. */
+function describeOutcome(outcome: SendOutcome): string | null {
+  switch (outcome.status) {
+    case 'sent':
+      return null;
+    case 'suppressed':
+      return outcome.reason;
+    case 'refused':
+      return outcome.reason;
+    case 'failed':
+      return `${outcome.failure}: ${outcome.detail}`;
+    case 'no_channel':
+      return outcome.detail;
+  }
 }

@@ -24,7 +24,7 @@ import { customers } from '../db/schema/customers.js';
 import { messageLog } from '../db/schema/messaging.js';
 import { merchants } from '../db/schema/tenancy.js';
 import { paymentAttempts, recoveryCases } from '../db/schema/cases.js';
-import { isOrderPaid } from '../adapters/razorpay/resources.js';
+import { isOrderPaid, isPaymentLinkPaid } from '../adapters/razorpay/resources.js';
 import type { RazorpayClient } from '../adapters/razorpay/client.js';
 
 export interface GatherOptions {
@@ -44,7 +44,23 @@ export interface GatheredFacts {
   /** Present so the executor can decide, and so the ledger can record, the source. */
   orderPaidCheckedRemotely: boolean;
   merchantName: string;
-  dryRun: boolean;
+  /**
+   * What Razorpay says has actually arrived, when it says anything at all.
+   *
+   * Null unless a remote check came back paid. The ladder writes this to
+   * `recovered_amount_paise` when it closes a case the gate found already paid,
+   * so a recovery the webhook missed still carries a real figure instead of
+   * falling back to the amount at risk. On a discounted link the two differ.
+   */
+  paidAmountPaise: number | null;
+  /**
+   * Razorpay actually said so.
+   *
+   * False when the gate is stopping the ladder on the assumption that the order
+   * is paid because the API could not be reached. The ladder must stop either
+   * way, but only a confirmed payment may be written to the ledger as one.
+   */
+  paidConfirmed: boolean;
 
   /** What composition and the send path need. Gathered once, here. */
   customerId: string | null;
@@ -96,11 +112,41 @@ export async function gatherFacts(opts: GatherOptions): Promise<GatheredFacts | 
   // paid through an entirely different channel in that window; local state
   // would happily say otherwise.
   let orderPaid = c.state === 'recovered';
+  let paymentLinkPaid = false;
+  let paidAmountPaise: number | null = null;
+  let paidConfirmed = false;
   let checkedRemotely = false;
 
   if (opts.razorpay && c.rzpOrderId) {
     const check = await isOrderPaid(opts.razorpay, c.rzpOrderId);
     orderPaid = check.paid;
+    // `confirmed` matters more than `paid` here. `isOrderPaid` answers "paid"
+    // when Razorpay is unreachable so the ladder stays silent — right for
+    // deciding whether to send, and disastrous for deciding whether to book a
+    // recovery, which would mint revenue out of every API blip.
+    paidConfirmed = check.paid && check.confirmed;
+    if (paidConfirmed && check.amountPaidPaise > 0) paidAmountPaise = check.amountPaidPaise;
+    checkedRemotely = true;
+  }
+
+  // ── and the recovery link, which is a DIFFERENT order ──
+  //
+  // A Razorpay payment link creates its own order when paid, so a customer who
+  // paid on the link we sent leaves the original order at `created` and the
+  // check above answers "no" forever. Without this the ladder kept messaging
+  // people who had already paid, and the case was written off as lost.
+  //
+  // Skipped when the order already reads paid: the answer cannot change the
+  // outcome, and this is a second network round trip on the hot path.
+  if (opts.razorpay && c.rzpPaymentLinkId && !orderPaid) {
+    const link = await isPaymentLinkPaid(opts.razorpay, c.rzpPaymentLinkId);
+    paymentLinkPaid = link.paid;
+    // No `confirmed` flag needed: this one fails closed to `paid: false`, so a
+    // true here is always a real answer from Razorpay.
+    if (link.paid) {
+      paidConfirmed = true;
+      if (link.amountPaidPaise > 0) paidAmountPaise = link.amountPaidPaise;
+    }
     checkedRemotely = true;
   }
 
@@ -112,6 +158,13 @@ export async function gatherFacts(opts: GatherOptions): Promise<GatheredFacts | 
   //
   // An explicit opt-in still counts, and a global opt-out still overrides
   // everything (the gate checks that separately and aborts).
+  //
+  // Only the channels there is actually a client for — see SENDABLE_CHANNELS.
+  // SMS used to be listed here, which made `channel_deliverable` pass on a
+  // customer we could reach by no other means: the gate saw a non-empty
+  // eligible list, let the rung through, and `send.ts` then answered
+  // `no_channel`. A case with a phone number and no email looked contactable
+  // and never was.
   const eligibleChannels: Channel[] = [];
   if (cust) {
     const basis = cust.transactionalBasisAt != null;
@@ -119,7 +172,6 @@ export async function gatherFacts(opts: GatherOptions): Promise<GatheredFacts | 
     const emailOk = Boolean(cust.email) && !cust.emailUndeliverableAt;
 
     if (phoneOk && (basis || cust.whatsappOptIn)) eligibleChannels.push('whatsapp');
-    if (phoneOk && (basis || cust.smsOptIn)) eligibleChannels.push('sms');
     if (emailOk && (basis || cust.emailOptIn)) eligibleChannels.push('email');
   }
 
@@ -226,6 +278,7 @@ export async function gatherFacts(opts: GatherOptions): Promise<GatheredFacts | 
   const facts: PreconditionFacts = {
     now,
     orderPaid,
+    paymentLinkPaid,
     deadlinePassed: c.deadlineAt != null && now.getTime() >= c.deadlineAt.getTime(),
     customerOptedOut: cust?.optedOutAt != null,
     eligibleChannels,
@@ -250,6 +303,8 @@ export async function gatherFacts(opts: GatherOptions): Promise<GatheredFacts | 
   return {
     facts,
     orderPaidCheckedRemotely: checkedRemotely,
+    paidAmountPaise,
+    paidConfirmed,
     merchantName: m.name,
 
     customerId: c.customerId,
@@ -267,10 +322,6 @@ export async function gatherFacts(opts: GatherOptions): Promise<GatheredFacts | 
     errorReason: c.errorReason,
     bank: c.bank,
     method: c.method,
-    // Dry-run plans everything and sends nothing. Distinct from the kill switch:
-    // execution_enabled=false stops the ladder entirely, dry_run lets it run and
-    // records what it would have done.
-    dryRun: m.dryRun,
   };
 }
 

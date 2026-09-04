@@ -198,9 +198,11 @@ async function dispatch(input: SendInput): Promise<DispatchResult> {
         };
   }
 
-  // SMS is deferred until DLT registration; in_app has no surface yet. Both are
-  // reported honestly rather than silently dropped, so a policy that lists them
-  // shows up in the dry-run report instead of going quiet.
+  // Unreachable from a ladder: `SENDABLE_CHANNELS` is what the policy schema
+  // validates against, so no compiled rung can name `sms` or `in_app` any more.
+  // Kept because `Channel` is still the full vocabulary — `message_log` holds
+  // historical rows naming these — and because a caller outside the policy path
+  // could pass one. Reported honestly rather than silently dropped.
   return { kind: 'no_channel', detail: `channel '${input.channel}' is not implemented yet` };
 }
 

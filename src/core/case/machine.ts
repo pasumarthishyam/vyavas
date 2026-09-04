@@ -27,7 +27,17 @@ export type TransitionReason =
   | 'customer_opted_out'
   | 'duplicate_case'
   | 'merchant_disconnected'
-  | 'manual_abort';
+  | 'manual_abort'
+  /**
+   * Parked by a pause for longer than a first message can honestly reach back.
+   *
+   * `aborted`, not `lost`, and the distinction is the one this file already
+   * draws everywhere else: `lost` means we tried and ran out of runway, and we
+   * did not try. Counting these as treatment failures would understate what
+   * recovery is worth by exactly the number of cases nobody was allowed to
+   * treat.
+   */
+  | 'stale_after_pause';
 
 const TRANSITIONS: Readonly<Record<CaseState, readonly CaseState[]>> = {
   detected: ['diagnosed', 'aborted'],
@@ -57,6 +67,7 @@ const REASONS_FOR: Readonly<Record<CaseState, readonly TransitionReason[]>> = {
     'duplicate_case',
     'merchant_disconnected',
     'manual_abort',
+    'stale_after_pause',
   ],
 };
 

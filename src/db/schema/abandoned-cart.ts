@@ -59,7 +59,24 @@ export const abandonedCarts = pgTable(
     /** Set once this agent has independently confirmed the link was paid. */
     paymentConfirmedAt: timestamp('payment_confirmed_at', { withTimezone: true }),
 
+    /**
+     * Set ONLY when an email actually left for the customer.
+     *
+     * It used to be stamped whenever the link was created, which is how a cart
+     * whose email was suppressed (dry run) or refused (frequency cap) still
+     * read as "emailed" on the console. `status` is the CART's lifecycle —
+     * link issued, paid, expired — and cannot answer "did anyone receive
+     * anything"; these three columns do.
+     */
     emailSentAt: timestamp('email_sent_at', { withTimezone: true }),
+    /**
+     * What the send path actually returned: sent | suppressed | refused |
+     * failed | no_channel | not_composed. Null on a cart that never got as far
+     * as attempting one.
+     */
+    emailStatus: text('email_status'),
+    /** The why behind a non-`sent` `emailStatus` — 'dry_run', 'frequency_cap', a provider error. */
+    emailDetail: text('email_detail'),
     failureReason: text('failure_reason'),
 
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

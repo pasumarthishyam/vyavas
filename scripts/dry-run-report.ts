@@ -1,12 +1,17 @@
 /**
- * The dry-run report.
+ * The send report.
  *
  *   npm run dry-run:report
  *
- * This is the deliverable of Stage 6, and the thing you put in front of a
- * design partner: two weeks of THEIR real traffic, showing exactly what would
- * have been said, to whom, and when — before they are asked to let anything
- * send.
+ * Two weeks of real traffic, showing what was said, to whom, when — and, more
+ * usefully, everything the gate stopped and why.
+ *
+ * The name is historical. This was the deliverable of Stage 6, when a merchant
+ * could be put in a dry run and shown exactly what WOULD have gone out before
+ * being asked to let anything send. That mode is gone: an account is now paused
+ * or live. The report is unchanged and still earns its place, because the
+ * interesting half was always the skips — held out, deferred, refused by the
+ * cap, uncomposable — not the sends.
  *
  * It reads only what the executor actually recorded. Nothing here re-derives a
  * decision, because a report that recomputes what the system "would" do is a
@@ -44,7 +49,7 @@ async function main(): Promise<void> {
 
   try {
     const [merchant] = rows(
-      await db.execute(sql`select id, name, dry_run, execution_enabled from merchants limit 1`),
+      await db.execute(sql`select id, name, execution_enabled from merchants limit 1`),
     );
     if (!merchant) {
       console.log('No merchant. Run: npm run seed:demo');
@@ -53,8 +58,8 @@ async function main(): Promise<void> {
 
     const mid = merchant.id as string;
 
-    console.log(`\n  ${merchant.name} — dry-run report, last ${days} days`);
-    console.log(`  execution ${merchant.execution_enabled ? 'ENABLED' : 'disabled'} · dry_run ${merchant.dry_run ? 'ON' : 'off'}`);
+    console.log(`\n  ${merchant.name} — send report, last ${days} days`);
+    console.log(`  sending ${merchant.execution_enabled ? 'LIVE' : 'PAUSED'}`);
     console.log('  ' + '─'.repeat(66));
 
     // ── what would have been sent ──

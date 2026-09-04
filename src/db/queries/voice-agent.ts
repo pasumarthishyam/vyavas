@@ -14,6 +14,7 @@ import { customers } from '../schema/customers.js';
 import { voiceCalls } from '../schema/voice.js';
 import { paiseFromColumn } from '../util.js';
 import type { CaseState } from '../../core/case/types.js';
+import { RESUME_MAX_AGE_DAYS } from '../../core/guards/resume.js';
 
 const num = paiseFromColumn;
 const LIVE_STATES: CaseState[] = ['detected', 'diagnosed', 'executing', 'paused'];
@@ -29,9 +30,26 @@ export interface CallableCase {
   createdAt: Date;
   /** How many calls have already been placed for this case, most recent first not needed here. */
   callCount: number;
+  /** Whole days since the payment failed. Drives the staleness warning. */
+  ageDays: number;
+  /**
+   * Why this case cannot be called right now, or null when it can.
+   *
+   * Computed here rather than in the page so the list and the button agree, and
+   * so the answer is the same one `/api/voice-agent/calls` enforces server-side.
+   */
+  blockedReason: string | null;
 }
 
-/** Live cases with a phone on file — the pool this agent can act on at all. */
+/**
+ * Cases with a phone on file that this agent could act on.
+ *
+ * `paused` is one of the LIVE states, so this used to offer parked cases as
+ * callable — a merchant who had switched the agent off was still invited to
+ * place a discount call, and the route would have let them. A case is listed
+ * with a reason now rather than silently dropped, because an operator looking
+ * for a case they know exists should find it and be told why it is unavailable.
+ */
 export async function getCallableCases(db: Database, merchantId: string, limit = 100): Promise<CallableCase[]> {
   const rows = await db
     .select({
@@ -59,17 +77,28 @@ export async function getCallableCases(db: Database, merchantId: string, limit =
     .orderBy(desc(recoveryCases.createdAt))
     .limit(limit);
 
-  return rows.map((r) => ({
-    id: r.id,
-    causeClass: r.causeClass,
-    errorReason: r.errorReason,
-    amountPaise: num(r.amount),
-    state: r.state,
-    customerName: r.customerName,
-    customerPhone: r.customerPhone,
-    createdAt: r.createdAt,
-    callCount: Number(r.callCount ?? 0),
-  }));
+  const now = Date.now();
+  return rows.map((r) => {
+    const ageDays = Math.max(0, Math.floor((now - r.createdAt.getTime()) / 86_400_000));
+    return {
+      id: r.id,
+      causeClass: r.causeClass,
+      errorReason: r.errorReason,
+      amountPaise: num(r.amount),
+      state: r.state,
+      customerName: r.customerName,
+      customerPhone: r.customerPhone,
+      createdAt: r.createdAt,
+      callCount: Number(r.callCount ?? 0),
+      ageDays,
+      blockedReason:
+        r.state === 'paused'
+          ? 'the agent is paused for this account'
+          : ageDays > RESUME_MAX_AGE_DAYS
+            ? `the payment failed ${ageDays} days ago`
+            : null,
+    };
+  });
 }
 
 export interface VoiceCallRow {

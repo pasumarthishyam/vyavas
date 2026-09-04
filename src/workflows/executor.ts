@@ -6,16 +6,19 @@
  * is why every guard converges here rather than being scattered across the
  * workflow.
  *
- * Messages are real from Stage 7 on. Two reasons a rung still does not send,
- * and they are NOT the same thing:
+ * One reason a rung runs the whole way and still does not send:
  *
  *   holdout    a real control group. Runs the identical ladder through the
  *              identical gate, sends nothing, and is the only honest way to
  *              know what the treatment was worth.
- *   dry_run    the merchant has not turned execution on yet.
  *
- * Collapsing them would make the incrementality report meaningless: a dry-run
- * case is not a control, it is a case nobody was ever treated in.
+ * There used to be a second, `dry_run`, for a merchant who had not switched
+ * sending on. It has been removed along with the three-state send mode: an
+ * account is now either paused or live, and a paused account does not reach
+ * this function at all — the gate parks the case before any rung is built.
+ * Keeping the two apart mattered while both existed, because a dry-run case is
+ * not a control, it is a case nobody was ever treated in, and counting it as
+ * one would have made the incrementality report meaningless.
  */
 
 import { eq, sql } from 'drizzle-orm';
@@ -41,7 +44,7 @@ import type { GatheredFacts } from './facts.js';
 import { escalateCase } from '../ops/escalation.js';
 import { raiseAlertForCluster } from '../ops/merchant-alert.js';
 
-export type SuppressionReason = 'holdout' | 'dry_run';
+export type SuppressionReason = 'holdout';
 
 export interface ExecuteRungInput {
   db: Database;
@@ -70,7 +73,7 @@ export interface ExecuteRungInput {
 }
 
 export interface RungOutcome {
-  disposition: 'executed' | 'suppressed' | 'skipped' | 'deferred' | 'aborted';
+  disposition: 'executed' | 'suppressed' | 'skipped' | 'deferred' | 'aborted' | 'paused';
   gate: GateResult;
   suppressedReason: SuppressionReason | null;
   action: Action | null;
@@ -91,6 +94,34 @@ export async function executeRung(input: ExecuteRungInput): Promise<RungOutcome>
   const { db, caseId, merchantId, rungIndex, rung, policy, gathered, cohort } = input;
 
   const gate = evaluatePreconditions(policy.preconditions, gathered.facts);
+
+  /*
+   * The merchant has paused this agent.
+   *
+   * Returned before anything is built or written, so a pause leaves no action
+   * row, no message row and no partial work — the case is simply parked where
+   * it stood. `run-ladder` turns this into the `paused` state and ends its run;
+   * resuming starts a fresh run at this same rung.
+   */
+  if (gate.disposition === 'paused') {
+    await appendEvent(db, {
+      caseId,
+      merchantId,
+      kind: 'rung_paused',
+      reason: 'execution_paused',
+      actor: 'workflow',
+      payload: { rung: rungIndex, at: rung.at },
+    });
+    return {
+      disposition: 'paused',
+      gate,
+      suppressedReason: null,
+      action: null,
+      channel: null,
+      retryAt: null,
+      note: gate.reason,
+    };
+  }
 
   if (gate.disposition === 'abort') {
     await appendEvent(db, {
@@ -156,10 +187,9 @@ export async function executeRung(input: ExecuteRungInput): Promise<RungOutcome>
 
   // ── why this will not actually send ──
   //
-  // Ordered by precedence: a holdout case is a holdout case even once the
-  // channels are built and the merchant has turned execution on.
-  const suppressedReason: SuppressionReason | null =
-    cohort === 'holdout' ? 'holdout' : gathered.dryRun ? 'dry_run' : null;
+  // Holdout is the only remaining reason a rung is fully planned, recorded and
+  // deliberately not sent. A paused merchant never gets this far.
+  const suppressedReason: SuppressionReason | null = cohort === 'holdout' ? 'holdout' : null;
 
   // ── record the action ──
   //

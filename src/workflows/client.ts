@@ -40,6 +40,31 @@ export interface CaseDiagnosedData {
   policyVersion: number;
   cohort: 'treatment' | 'holdout';
   attended: boolean;
+  /**
+   * What `run-ladder` dedupes on. One ladder per run key, ever.
+   *
+   * The case id alone for a first run, and `<caseId>:r<n>` for the nth resume
+   * after a pause. It cannot simply be the case id, because resuming means
+   * publishing `case/diagnosed` for a case that already ran one — under the old
+   * key Inngest would swallow it as a duplicate, and the case would sit in
+   * `executing` with no run behind it. Nothing would ever say so.
+   *
+   * Optional so an older event still in flight during a deploy keeps working;
+   * `runKeyFor` falls back to the case id.
+   */
+  runKey?: string;
+}
+
+/**
+ * The key for one ladder run.
+ *
+ * The only place this string is built, for the same reason `messageKey` is the
+ * only place an idempotency key is built: a key format that lives in two places
+ * is a key format that will disagree, and the thing it guards is whether a real
+ * person gets messaged twice.
+ */
+export function runKeyFor(caseId: string, resumeCount = 0): string {
+  return resumeCount > 0 ? `${caseId}:r${resumeCount}` : caseId;
 }
 
 export interface CaseResolvedData {

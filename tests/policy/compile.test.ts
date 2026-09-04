@@ -134,7 +134,7 @@ describe('table-level integrity', () => {
       id: 'b.row',
       match: { causeClass: ['instrument_dead'] },
       maxMessages: 1,
-      ladder: [{ at: '5m', action: 'nudge', channels: ['sms'], intent: 'reminder' }],
+      ladder: [{ at: '5m', action: 'nudge', channels: ['email'], intent: 'reminder' }],
     });
     expectIssue([...baseTable(), a, b], 'would depend on declaration');
   });
@@ -244,7 +244,7 @@ describe('the safety ceiling — a policy may tighten a limit, never loosen one'
 
 describe('attended vs unattended — the compliance boundary', () => {
   const unattendedLadder = [
-    { at: '0m', action: 'send_pre_debit_notice', channels: ['sms'], leadTime: '24h' },
+    { at: '0m', action: 'send_pre_debit_notice', channels: ['whatsapp'], leadTime: '24h' },
     { at: '25h', action: 'retry_debit' },
   ];
 

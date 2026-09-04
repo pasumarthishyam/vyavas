@@ -141,7 +141,6 @@ async function main(): Promise<void> {
           holdoutBasisPoints: 1000,
           holdoutEnabled: true,
           // Defaults stay safe even in a demo: nothing sends.
-          dryRun: true,
           executionEnabled: false,
         })
         .returning();

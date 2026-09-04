@@ -137,6 +137,84 @@ export function orderPaidEnvelope(
   };
 }
 
+/**
+ * `payment_link.paid` — a recovery link we sent was paid.
+ *
+ * The shape that matters here is the one that caused the bug this fixture
+ * exists to guard: **`order.id` is the LINK's own order, not the order that
+ * failed.** Razorpay creates a fresh order when a payment link is paid, so
+ * resolving this event by order id can never find the case that created the
+ * link. `reference_id` is the only way back, and it carries our own row's UUID.
+ *
+ * Defaulted to an order id that deliberately does not look like the failed
+ * one, so a test that accidentally resolves by order id fails loudly rather
+ * than passing on a coincidence.
+ */
+export function paymentLinkPaidEnvelope(
+  over: {
+    referenceId?: string;
+    linkId?: string;
+    amount?: number;
+    amountPaid?: number;
+    paymentId?: string;
+    /** The link's OWN order, created by Razorpay at payment time. */
+    linkOrderId?: string;
+  } = {},
+): RazorpayWebhookEnvelope {
+  const amount = over.amount ?? 184300;
+  const linkOrderId = over.linkOrderId ?? 'order_LINKOWNORDER1';
+  return {
+    entity: 'event',
+    account_id: 'acc_TEST000000001',
+    event: 'payment_link.paid',
+    contains: ['payment_link', 'payment', 'order'],
+    payload: {
+      payment_link: {
+        entity: {
+          id: over.linkId ?? 'plink_TEST00000001',
+          entity: 'payment_link',
+          amount,
+          amount_paid: over.amountPaid ?? amount,
+          currency: 'INR',
+          status: 'paid',
+          short_url: 'https://rzp.io/i/testlink',
+          reference_id: over.referenceId ?? '',
+          order_id: linkOrderId,
+          created_at: AUG_2026 + 300,
+        },
+      },
+      payment: {
+        entity: {
+          id: over.paymentId ?? 'pay_TEST0000000003',
+          entity: 'payment',
+          amount: over.amountPaid ?? amount,
+          currency: 'INR',
+          status: 'captured',
+          order_id: linkOrderId,
+          method: 'upi',
+          captured: true,
+          email: 'rahul@example.com',
+          contact: '+919876543210',
+          created_at: AUG_2026 + 900,
+        },
+      },
+      order: {
+        entity: {
+          id: linkOrderId,
+          entity: 'order',
+          amount,
+          amount_paid: over.amountPaid ?? amount,
+          amount_due: 0,
+          currency: 'INR',
+          status: 'paid',
+          created_at: AUG_2026 + 300,
+        },
+      },
+    },
+    created_at: AUG_2026 + 900,
+  };
+}
+
 export function downtimeEnvelope(
   over: {
     id?: string;

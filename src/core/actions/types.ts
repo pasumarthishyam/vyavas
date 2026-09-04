@@ -19,6 +19,35 @@ export const CHANNELS = ['whatsapp', 'sms', 'email', 'in_app'] as const;
 export type Channel = (typeof CHANNELS)[number];
 
 /**
+ * The channels a ladder may actually name.
+ *
+ * `CHANNELS` above is the full historical vocabulary and has to stay that way:
+ * it is the source of the Postgres `channel` enum, `message_log` already holds
+ * rows naming these values, and removing a value from a Postgres enum is not a
+ * cheap or reversible migration.
+ *
+ * This is the narrower list, and it is what `policy/schema.ts` validates a
+ * rung's `channels` against — so a YAML edit naming a channel we cannot send on
+ * fails the build instead of failing at 3am.
+ *
+ * SMS is absent because there is no SMS client and there cannot be one yet:
+ * transactional SMS in India requires DLT registration of the sender header and
+ * of every template, and that has not been done. Its absence used to be
+ * invisible — `send.ts` returned `no_channel`, `selectChannel` fell through to
+ * whatever came next in the list, and a rung whose only channel was `sms`
+ * reported "no eligible channel" and lost the touch silently. Four rungs in the
+ * table were in exactly that position.
+ *
+ * `in_app` is absent for the same reason: there is no surface.
+ *
+ * Adding a channel here is two steps in this order: build its client in
+ * `workflows/channels.ts` and its branch in `messaging/send.ts` first, then add
+ * it to this list.
+ */
+export const SENDABLE_CHANNELS = ['whatsapp', 'email'] as const;
+export type SendableChannel = (typeof SENDABLE_CHANNELS)[number];
+
+/**
  * The *intent* of a message, not its text.
  *
  * Copy is generated later, inside an approved template, from this intent plus

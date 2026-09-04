@@ -93,6 +93,15 @@ export function RecoveryConsole({ initial }: { initial: Payload }) {
   const [notice, setNotice] = useState<Notice | null>(null);
   const [stalled, setStalled] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<Confirm | null>(null);
+  /**
+   * The going-live preview, held open while a person decides.
+   *
+   * Null means no decision is pending. It is fetched fresh every time the
+   * switch is pressed rather than polled with the rest of the console: a stale
+   * count of who is about to be messaged is worse than no count.
+   */
+  const [resumePreview, setResumePreview] = useState<ResumePreview | null>(null);
+  const [resumeBusy, setResumeBusy] = useState(false);
   /** The case whose drawer is open, captured at click time so the drawer keeps
    *  working even if the case later drops out of the open-cases list (e.g. it
    *  resolves while someone is reading its trace). */
@@ -304,24 +313,95 @@ export function RecoveryConsole({ initial }: { initial: Payload }) {
     }
   }
 
-  async function setMode(mode: SendMode) {
+  /*
+   * Going live asks first; pausing does not.
+   *
+   * The asymmetry is the point. Pausing is safe and reversible — cases park and
+   * keep their place — so making someone confirm it would be friction with
+   * nothing behind it. Going live can put messages in front of real people the
+   * same second, and after a long pause it can put a great many of them there
+   * at once, because rung times count from when the payment failed rather than
+   * from when you pressed the button.
+   *
+   * So: pause immediately, and open the preview before resuming. If there is
+   * nothing parked there is nothing to decide, and it goes live directly.
+   */
+  async function onModeChange(next: SendMode) {
     setNotice(null);
-    await fetch('/api/recovery/execution', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode }),
-    });
-    await refresh();
+
+    if (next === 'paused') {
+      await commitMode('paused', 'none');
+      return;
+    }
+
+    setResumeBusy(true);
+    try {
+      const res = await fetch('/api/recovery/execution');
+      const body = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        preview?: ResumePreview;
+      };
+
+      /*
+       * Always ask. Even when nothing is parked.
+       *
+       * This used to go straight live whenever `paused === 0`, on the reasoning
+       * that there was no decision to make. That is wrong about what the
+       * confirmation is FOR. Turning this agent on is the moment it starts
+       * putting messages in front of real people, and the fact worth seeing
+       * before you do it is where those messages go — which is exactly what an
+       * account with nothing parked still needs to be told.
+       *
+       * A missing preview does not become a silent go-live either: it opens the
+       * dialog with an empty one, so the decision is still a person's.
+       */
+      setResumePreview(
+        body.ok && body.preview
+          ? body.preview
+          : { paused: 0, resumable: 0, tooOld: 0, pastDeadline: 0, amountResumablePaise: 0, amountClosingPaise: 0, cases: [] },
+      );
+    } catch {
+      setNotice({ message: 'Could not check what is waiting. Nothing was changed.', at: Date.now(), tone: 'error' });
+    } finally {
+      setResumeBusy(false);
+    }
+  }
+
+  async function commitMode(mode: SendMode, resume: 'resume' | 'none') {
+    setResumeBusy(true);
+    try {
+      const res = await fetch('/api/recovery/execution', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode, resume }),
+      });
+      const body = (await res.json().catch(() => ({}))) as {
+        resumed?: number;
+        closed?: number;
+      };
+
+      // Say what actually happened. "Live" alone leaves an operator guessing
+      // whether the parked cases moved, and that is the one thing they just
+      // made a decision about.
+      if (mode === 'live' && (body.resumed || body.closed)) {
+        const parts: string[] = [];
+        if (body.resumed) parts.push(`${body.resumed} case${body.resumed === 1 ? '' : 's'} resumed`);
+        if (body.closed) parts.push(`${body.closed} closed`);
+        setNotice({ message: parts.join(' · '), at: Date.now(), tone: 'ok' });
+      }
+    } finally {
+      setResumePreview(null);
+      setResumeBusy(false);
+      await refresh();
+    }
   }
 
   const merchant = data.merchant;
-  const mode: SendMode = !merchant?.executionEnabled
-    ? 'off'
-    : merchant.dryRun
-      ? 'dry_run'
-      : 'live';
+  const mode: SendMode = merchant?.executionEnabled ? 'live' : 'paused';
   const live = mode === 'live';
-  const canStart = mode !== 'off';
+  // Nothing can be started by hand while the agent is paused either. The gate
+  // would park the case again on its first rung, which reads as a broken button.
+  const canStart = live;
 
   // ── the visible set ──
   const shown = useMemo(() => {
@@ -378,7 +458,7 @@ export function RecoveryConsole({ initial }: { initial: Payload }) {
           <div className="eyebrow">{merchant?.name ?? 'Recovery'}</div>
           <h1>Recovery</h1>
         </div>
-        <ModeSwitch mode={mode} onChange={setMode} disabled={!merchant} />
+        <ModeSwitch mode={mode} onChange={onModeChange} disabled={!merchant || resumeBusy} />
       </div>
 
       <div className="grid grid-3" style={{ marginBottom: 20 }}>
@@ -432,13 +512,13 @@ export function RecoveryConsole({ initial }: { initial: Payload }) {
 
       <Routing routing={data.routing} live={live} />
 
-      {mode === 'off' && data.cases.length > 0 && (
+      {mode === 'paused' && data.cases.length > 0 && (
         <div className="notice">
           <InfoIcon />
           <span>
-            Nothing runs while sending is off — the gate aborts before anything is composed. Switch
-            to <strong style={{ fontWeight: 550 }}>Dry run</strong> to see exactly what would be
-            sent, without sending it.
+            Paused. These cases keep their place, their deadline and their history, and nothing is
+            sent. Switching to <strong style={{ fontWeight: 550 }}>Live</strong> starts them again
+            from the step each one had reached.
           </span>
         </div>
       )}
@@ -529,6 +609,16 @@ export function RecoveryConsole({ initial }: { initial: Payload }) {
           busy={busy}
           onAct={(id, action) => void actOnEscalation(id, action)}
           onClose={() => setOpenCase(null)}
+        />
+      )}
+
+      {resumePreview && (
+        <ResumeOverlay
+          preview={resumePreview}
+          routing={data.routing}
+          busy={resumeBusy}
+          onCancel={() => setResumePreview(null)}
+          onConfirm={(choice) => void commitMode('live', choice)}
         />
       )}
     </>
@@ -737,11 +827,14 @@ function CaseTable({
   );
 }
 
+/**
+ * Only the channels this system sends on. A `message_log` row naming anything
+ * else is historical, and the lookup falls back to the raw value rather than
+ * inventing a label for a channel the product no longer has.
+ */
 const CHANNEL_LABEL: Record<string, string> = {
   whatsapp: 'WhatsApp',
   email: 'Email',
-  sms: 'SMS',
-  in_app: 'In-app',
 };
 
 const DECISION_COPY: Record<string, { verb: string; tone: 'progress' | 'done' | 'failed' | 'muted' }> = {
@@ -751,6 +844,10 @@ const DECISION_COPY: Record<string, { verb: string; tone: 'progress' | 'done' | 
   rung_aborted: { verb: 'Stopped', tone: 'failed' },
   rung_abandoned: { verb: 'Abandoned', tone: 'failed' },
   rung_uncomposable: { verb: 'Could not compose', tone: 'failed' },
+  // Muted, not failed. Nothing went wrong — the agent is paused and this case
+  // is waiting, which is a different thing from a case that was stopped.
+  rung_paused: { verb: 'Paused — held for resume', tone: 'muted' },
+  ladder_paused: { verb: 'Paused — held for resume', tone: 'muted' },
   ladder_complete: { verb: 'Ladder complete', tone: 'done' },
   payment_link_created: { verb: 'Payment link created', tone: 'progress' },
   recovery_started: { verb: 'Recovery started', tone: 'progress' },
@@ -1471,11 +1568,212 @@ function Routing({ routing, live }: { routing?: Routing; live: boolean }) {
   );
 }
 
+/* ── going live ──────────────────────────────────────────────────────────── */
+
+interface PausedCasePreview {
+  id: string;
+  amountPaise: number;
+  causeClass: string | null;
+  errorReason: string | null;
+  customerContact: string | null;
+  messagesSent: number;
+  ageDays: number;
+  disposition: 'resume' | 'too_old' | 'past_deadline';
+  reason: string;
+}
+
+interface ResumePreview {
+  paused: number;
+  resumable: number;
+  tooOld: number;
+  pastDeadline: number;
+  amountResumablePaise: number;
+  amountClosingPaise: number;
+  cases: PausedCasePreview[];
+}
+
+/**
+ * What happens when the agent comes back on.
+ *
+ * This exists because resuming used to be silent and automatic, and on a long
+ * pause that is a mistake you cannot take back. Rung times are measured from
+ * when the payment failed, so a case parked past its rung times fires the
+ * instant it is woken — pause for a week, press Live, and a hundred people hear
+ * from you at once about checkouts they abandoned last Tuesday.
+ *
+ * So the numbers come first and the buttons come second, and the destructive
+ * reading of each button is written on its face rather than implied. The
+ * default action is the conservative one for the cases nobody can help: too-old
+ * and past-deadline cases are closed on either path, because there is no choice
+ * to offer about them — a message about a five-day-old checkout is not an
+ * option that was withheld, it is one that does not exist.
+ */
+function ResumeOverlay({
+  preview,
+  routing,
+  busy,
+  onCancel,
+  onConfirm,
+}: {
+  preview: ResumePreview;
+  routing?: Routing;
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: (choice: 'resume' | 'none') => void;
+}) {
+  const closing = preview.tooOld + preview.pastDeadline;
+  const nothingWaiting = preview.paused === 0;
+
+  /*
+   * Where messages actually go.
+   *
+   * The single most useful thing to put in front of someone at the moment they
+   * switch an agent on, and the only thing worth saying at all when nothing is
+   * parked. "Live" on an account whose channels are diverted to a test inbox is
+   * a completely different act from "Live" on one that is not, and the console
+   * should not make you go and check.
+   */
+  const waDiverted = Boolean(routing?.whatsappRedirectTo);
+  const mailDiverted = Boolean(routing?.emailRedirectTo);
+  const reachesRealPeople = Boolean(routing) && (!waDiverted || !mailDiverted);
+
+  return (
+    <div className="drawer-backdrop" onClick={busy ? undefined : onCancel}>
+      <div
+        className="resume-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="resume-title"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="resume-head">
+          <h2 id="resume-title" className="resume-title">
+            {nothingWaiting
+              ? 'Turn the agent on?'
+              : `${preview.paused} case${preview.paused === 1 ? '' : 's'} ${preview.paused === 1 ? 'is' : 'are'} waiting`}
+          </h2>
+          <p className="resume-sub">
+            {nothingWaiting
+              ? 'It will act on new failures from this point. Nothing has changed yet.'
+              : 'Turning the agent on decides what happens to each of them. Nothing has changed yet.'}
+          </p>
+        </div>
+
+        {/* Never colour alone: the sentence says where messages go, and the
+            critical tint only reinforces it. */}
+        <div className={`resume-routing${reachesRealPeople ? ' resume-routing-live' : ''}`}>
+          {routing ? (
+            <>
+              <strong style={{ fontWeight: 550 }}>WhatsApp</strong>{' '}
+              {waDiverted ? (
+                <>→ <span className="mono">+{maskPhone(routing.whatsappRedirectTo!)}</span></>
+              ) : (
+                <>→ the real customer number</>
+              )}
+              {' · '}
+              <strong style={{ fontWeight: 550 }}>Email</strong>{' '}
+              {mailDiverted ? (
+                <>→ <span className="mono">{routing.emailRedirectTo}</span></>
+              ) : (
+                <>→ the real customer address</>
+              )}
+              {reachesRealPeople && ' — these reach real people.'}
+            </>
+          ) : (
+            <>Message routing for this account is unknown.</>
+          )}
+        </div>
+
+        {!nothingWaiting && (
+        <div className="resume-split">
+          <div className="resume-bucket">
+            <div className="resume-count">{preview.resumable}</div>
+            <div className="resume-bucket-label">will be messaged</div>
+            <div className="resume-bucket-foot">
+              {inr(preview.amountResumablePaise)} · picks up where each one stopped
+            </div>
+          </div>
+          <div className="resume-bucket resume-bucket-muted">
+            <div className="resume-count">{closing}</div>
+            <div className="resume-bucket-label">will be closed, not messaged</div>
+            <div className="resume-bucket-foot">
+              {inr(preview.amountClosingPaise)}
+              {preview.tooOld > 0 && ` · ${preview.tooOld} too old`}
+              {preview.pastDeadline > 0 && ` · ${preview.pastDeadline} past deadline`}
+            </div>
+          </div>
+        </div>
+        )}
+
+        {closing > 0 && (
+          <p className="resume-note">
+            A message has to be about something the person still remembers doing. These are past
+            that, so they are closed rather than sent on either choice below.
+          </p>
+        )}
+
+        {preview.cases.length > 0 && (
+        <div className="resume-list">
+          {preview.cases.slice(0, 40).map((c) => (
+            <div key={c.id} className="resume-row">
+              <span
+                className="dot"
+                style={{
+                  background:
+                    c.disposition === 'resume' ? 'var(--data)' : 'var(--ink-muted)',
+                }}
+              />
+              <span className="resume-row-amount">{inr(c.amountPaise)}</span>
+              <span className="resume-row-who">{c.customerContact ?? 'no contact'}</span>
+              <span className="resume-row-why">{c.reason}</span>
+            </div>
+          ))}
+          {preview.cases.length > 40 && (
+            <div className="resume-row resume-row-more">
+              and {preview.cases.length - 40} more
+            </div>
+          )}
+        </div>
+        )}
+
+        <div className="resume-actions">
+          <button className="btn-ghost" onClick={onCancel} disabled={busy}>
+            Stay paused
+          </button>
+          {/* Offered only when there is actually somebody waiting. With nothing
+              parked it is the same act as the primary button, and two buttons
+              that do the same thing make a person hunt for the difference. */}
+          {!nothingWaiting && (
+          <button
+            className="btn-ghost"
+            onClick={() => onConfirm('none')}
+            disabled={busy}
+            title="The agent handles new failures from now on. Everyone currently waiting is closed without being contacted."
+          >
+            Go live, contact nobody waiting
+          </button>
+          )}
+          <button
+            className="btn-primary"
+            onClick={() => onConfirm('resume')}
+            disabled={busy}
+          >
+            {busy
+              ? 'Working…'
+              : preview.resumable > 0
+                ? `Go live and resume ${preview.resumable}`
+                : 'Go live'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ── the switch ──────────────────────────────────────────────────────────── */
 
 const MODES: { value: SendMode; label: string; hint: string }[] = [
-  { value: 'off', label: 'Off', hint: 'Nothing runs' },
-  { value: 'dry_run', label: 'Dry run', hint: 'Runs everything, sends nothing' },
+  { value: 'paused', label: 'Paused', hint: 'Cases are held, nothing is sent' },
   { value: 'live', label: 'Live', hint: 'Messages reach real recipients' },
 ];
 
@@ -1739,9 +2037,41 @@ const EVENT_COPY: Record<string, string> = {
   rung_abandoned: 'Gave up on a rung',
   rung_uncomposable: 'Could not compose a message',
   payment_link_created: 'Payment link created',
+  rung_paused: 'Held — agent paused',
+  ladder_paused: 'Held — agent paused',
   escalated: 'Escalated to a person',
   merchant_alerted: 'Merchant alerted',
 };
+
+/**
+ * Why a case ended, in words.
+ *
+ * The activity feed carries the machine's transition reason, and half of them
+ * are only legible if you already know the state machine. `stale_after_pause`
+ * in particular reads like an error and is not one — it is the system declining
+ * to message someone about a payment they have long since forgotten.
+ */
+const REASON_COPY: Record<string, string> = {
+  payment_received: 'the money arrived',
+  already_paid: 'already paid',
+  deadline_passed: 'the recovery window closed',
+  ladder_exhausted: 'every step had been tried',
+  customer_opted_out: 'the customer opted out',
+  duplicate_case: 'a duplicate of another case',
+  merchant_disconnected: 'the account was disconnected',
+  manual_abort: 'stopped by a person',
+  stale_after_pause: 'too old to message after the pause',
+  paused_by_merchant: 'the agent was paused',
+  resumed: 'the agent was resumed',
+  resume_failed: 'could not be restarted — will retry',
+  ladder_started: 'the ladder started',
+  execution_paused: 'the agent is paused',
+};
+
+export function reasonLabel(reason: string | null): string | null {
+  if (!reason) return null;
+  return REASON_COPY[reason] ?? reason.replace(/_/g, ' ');
+}
 
 /** `2026-08-31` → `Today` / `Yesterday` / `31 Aug`. */
 function dayLabel(d: Date, now: Date): string {
@@ -1798,14 +2128,17 @@ function toEntry(r: ActivityRow): Entry {
     category: r.category,
     title: EVENT_COPY[r.event] ?? r.event.replace(/_/g, ' '),
     /*
-     * The gate's own sentence, unedited.
+     * The gate's own sentence, kept whole.
      *
-     * "already 2 message(s) in 24h (cap 2)" is the whole answer to "why did
+     * "already 2 message(s) in 24h (cap 2)" is the entire answer to "why did
      * nothing send"; paraphrasing it into a status word throws away the part
-     * that tells you what to do. `detail` carries the per-kind extras — which
-     * queue an escalation went to, whether Claude wrote the brief.
+     * that tells you what to do, so `reasonLabel` passes anything it does not
+     * recognise straight through. What it DOES translate is the state machine's
+     * own vocabulary — `stale_after_pause` reads like an error and is not one.
+     * `detail` carries the per-kind extras: which queue an escalation went to,
+     * whether Claude wrote the brief.
      */
-    detail: [r.reason, r.detail].filter(Boolean).join(' · ') || null,
+    detail: [reasonLabel(r.reason), r.detail].filter(Boolean).join(' · ') || null,
     outcome: r.retryAt ? `retry ${whenLabel(new Date(r.retryAt))}` : null,
     outcomeTone: 'var(--ink-muted)',
     caseId: r.caseId,

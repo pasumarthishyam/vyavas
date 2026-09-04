@@ -1,6 +1,6 @@
 import Link from 'next/link';
 
-import { getDb } from '../db/client';
+import { getDb } from '../../db/client';
 import {
   getCauseClassBreakdown,
   getDailyTrend,
@@ -10,12 +10,12 @@ import {
   getRecentCases,
   getRevenueAtRisk,
   getTopReasons,
-} from '../db/queries/dashboard';
-import { Bars, Empty, Heatmap, Trend } from '../components/charts';
-import { Alert, Delta, Stat, StatePill, causeHint, causeLabel, inr, relativeTime } from '../components/ui';
-import { DateRangeFilter } from '../components/date-range-filter';
-import { resolveDateRange } from '../lib/date-range';
-import { selectMerchant } from '../lib/merchant-context';
+} from '../../db/queries/dashboard';
+import { Bars, Empty, Heatmap, Trend } from '../../components/charts';
+import { Alert, Delta, Stat, StatePill, causeHint, causeLabel, inr, relativeTime } from '../../components/ui';
+import { DateRangeFilter } from '../../components/date-range-filter';
+import { resolveDateRange } from '../../lib/date-range';
+import { selectMerchant } from '../../lib/merchant-context';
 
 // Every figure is live. A cached dashboard that quietly shows yesterday's
 // exposure is worse than no dashboard.

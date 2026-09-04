@@ -20,6 +20,22 @@
   --surface-sunken: #f4f3f0;
   --surface-hover: #f2f1ed;
 
+  /*
+   * The sidebar's own surface, not borrowed from `--surface-sunken`.
+   *
+   * That token is tuned for a small inset — a table stripe, a code block — a
+   * few pixels of tone shift that reads fine at that scale and reads muddy
+   * spread across an entire panel next to the page it sits on: two very close
+   * warm-neutral tones with almost no border between them (`--hairline` sits
+   * at 9% alpha) blend into each other rather than reading as two intentional
+   * surfaces, which is what "the sidebar colour looks a little off" was.
+   * `--sidebar-border` is `--hairline-strong`, not `--hairline`, for the same
+   * reason: the edge between two close tones needs a real line to read as a
+   * seam rather than a rendering artifact.
+   */
+  --sidebar-bg: #eeede8;
+  --sidebar-border: var(--hairline-strong);
+
   /* ink */
   --ink: #0b0b0b;
   --ink-secondary: #52514e;
@@ -118,6 +134,13 @@
     --surface: #1a1a19;
     --surface-sunken: #141413;
     --surface-hover: #222220;
+    /* Lighter than `--page`, same direction as light mode's darker-than-page
+       sidebar: both are the step AWAY from the page tone, toward the cards
+       sitting on it. Going darker than near-black page reads as pure black —
+       there is no room left to recede into — so dark mode recedes upward
+       instead, and by enough (0d0d0d → 171716) to read as a seam, not noise. */
+    --sidebar-bg: #171716;
+    --sidebar-border: var(--hairline-strong);
 
     --ink: #ffffff;
     --ink-secondary: #c3c2b7;
@@ -157,6 +180,8 @@
   --surface: #1a1a19;
   --surface-sunken: #141413;
   --surface-hover: #222220;
+  --sidebar-bg: #171716;
+  --sidebar-border: var(--hairline-strong);
 
   --ink: #ffffff;
   --ink-secondary: #c3c2b7;
@@ -274,7 +299,7 @@ svg {
 }
 
 .sidebar {
-  border-right: 1px solid var(--hairline);
+  border-right: 1px solid var(--sidebar-border);
   padding: 18px 14px 16px;
   position: sticky;
   top: 0;
@@ -282,7 +307,7 @@ svg {
   display: flex;
   flex-direction: column;
   gap: 18px;
-  background: var(--surface-sunken);
+  background: var(--sidebar-bg);
   overflow: hidden;
 }
 
@@ -307,7 +332,7 @@ svg {
   justify-content: space-between;
   gap: 8px;
   padding: 4px 4px 12px;
-  border-bottom: 1px solid var(--hairline);
+  border-bottom: 1px solid var(--sidebar-border);
 }
 
 /*
@@ -494,14 +519,14 @@ svg {
 :root[data-sidebar='collapsed'] .nav-section {
   font-size: 0;
   padding: 10px 8px;
-  border-top: 1px solid var(--hairline);
+  border-top: 1px solid var(--sidebar-border);
   margin-top: 4px;
 }
 
 .sidebar-foot {
   margin-top: auto;
   padding-top: 12px;
-  border-top: 1px solid var(--hairline);
+  border-top: 1px solid var(--sidebar-border);
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -544,6 +569,207 @@ svg {
 :root[data-sidebar='collapsed'] .theme-toggle-placeholder {
   justify-content: center;
   padding: 0;
+}
+
+/* ── who is signed in ─────────────────────────────────────────────────────── */
+
+.sidebar-account {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 10px;
+  border-top: 1px solid var(--sidebar-border);
+}
+
+.account-who {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 34px;
+  padding: 0 10px;
+  min-width: 0;
+}
+
+:root[data-sidebar='collapsed'] .account-who {
+  justify-content: center;
+  padding: 0;
+}
+
+.account-avatar {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--surface-hover);
+  color: var(--ink-secondary);
+  font-size: 10px;
+  font-weight: 620;
+  letter-spacing: 0.02em;
+}
+
+/* A long address must not widen the rail or wrap onto a second line. */
+.account-email {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--ink-secondary);
+}
+
+/* ── sign in ──────────────────────────────────────────────────────────────── */
+
+/*
+ * The whole viewport, and only ever the whole viewport.
+ *
+ * `100dvh` rather than `100vh`: on mobile browsers `vh` is measured against the
+ * chrome-less viewport, so a `100vh` page is taller than the screen and a
+ * vertically centred card sits slightly below the fold until you scroll.
+ *
+ * The background is `--page`, not `--surface`. It read `var(--canvas, ...)`
+ * before — a token that does not exist in this file, so every login rendered on
+ * the fallback, which is the CARD's own colour: a card with no visible edge
+ * floating on a background it matched exactly.
+ */
+.login-page {
+  min-height: 100dvh;
+  display: grid;
+  grid-template-rows: 1fr auto;
+  justify-items: center;
+  padding: 24px;
+  background: var(--page);
+}
+
+/* A single, very quiet centre wash. Enough to make the card read as sitting ON
+   something; not enough to become decoration. */
+.login-page::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(60% 50% at 50% 38%, var(--surface) 0%, transparent 70%);
+  opacity: 0.7;
+}
+
+.login-card {
+  position: relative;
+  align-self: center;
+  width: 100%;
+  max-width: 384px;
+  padding: 36px 32px 32px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+}
+
+.login-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 28px;
+}
+
+.login-brand-name {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.login-title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.022em;
+}
+
+.login-sub {
+  margin: 7px 0 26px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink-secondary);
+}
+
+/* Sits below the card, in the page's own colour — a footnote about the deployment,
+   never a second call to action. */
+.login-foot {
+  align-self: end;
+  margin-top: 24px;
+  font-size: 12px;
+  color: var(--ink-muted);
+  text-align: center;
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+}
+
+.login-label {
+  font-size: 12px;
+  font-weight: 540;
+  color: var(--ink-secondary);
+  margin-bottom: 6px;
+}
+
+.login-input {
+  height: 40px;
+  padding: 0 12px;
+  margin-bottom: 18px;
+  font: inherit;
+  font-size: 14px;
+  color: var(--ink);
+  background: var(--surface-sunken);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  transition:
+    border-color var(--t-fast) var(--ease),
+    box-shadow var(--t-fast) var(--ease);
+}
+
+/* A ring rather than a colour swap alone — visible to someone who cannot
+   distinguish the border tint, and it does not shift the field by a pixel. */
+.login-input:focus {
+  outline: none;
+  border-color: var(--data);
+  box-shadow: 0 0 0 3px var(--data-soft);
+}
+
+/*
+ * Never colour alone. The message is the signal; the tint only reinforces it,
+ * so this still reads correctly at any contrast setting. `--critical` is the
+ * palette's status red — it read `var(--danger, …)` before, a token this file
+ * never defines, so it always landed on the hardcoded fallback.
+ */
+.login-error {
+  margin: -4px 0 16px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--critical);
+}
+
+.login-submit {
+  height: 40px;
+  margin-top: 2px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 550;
+  color: var(--page);
+  background: var(--ink);
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: opacity var(--t-fast) var(--ease);
+}
+
+.login-submit:hover:not(:disabled) {
+  opacity: 0.88;
+}
+
+.login-submit:disabled {
+  opacity: 0.55;
+  cursor: default;
 }
 
 .main {
@@ -1808,7 +2034,12 @@ table.data tbody tr:last-child td {
 /* ── merchant switcher ──────────────────────────────────────────────────────
    Sits directly under the brand. Which account you are looking at, and whether
    it can reach real customers, are the two facts that give every number below
-   its meaning — so neither is hidden behind the menu. */
+   its meaning — so neither is hidden behind the menu.
+
+   Built from the same two pieces as the sign-out row below it — a monogram
+   tile plus a text stack — rather than its own one-off layout, so the two
+   identity rows in this sidebar (which account, which person) read as one
+   family instead of two different controls that happen to be stacked. */
 
 .sidebar-switcher {
   padding: 0 12px 10px;
@@ -1818,26 +2049,13 @@ table.data tbody tr:last-child td {
   position: relative;
 }
 
-/*
- * Two lines, not one.
- *
- * On one line the account name, the mode chip and the caret fought over 210px
- * and the name lost every time — a merchant called "Tradesmetrix" rendered as
- * "Tra…", which is exactly the fact this control exists to state. The name now
- * owns the first line outright and the mode sits under it, so both are legible
- * at the rail's real width.
- */
 .switcher-face {
   width: 100%;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-areas:
-    'name caret'
-    'mode caret';
+  display: flex;
   align-items: center;
-  gap: 3px 8px;
-  padding: 7px 9px;
-  border: 1px solid var(--line);
+  gap: 9px;
+  padding: 7px 8px;
+  border: 1px solid var(--sidebar-border);
   border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--ink);
@@ -1845,96 +2063,202 @@ table.data tbody tr:last-child td {
   font-size: 13px;
   cursor: pointer;
   text-align: left;
-  transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
+  box-shadow: var(--shadow-sm);
+  transition:
+    background var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease),
+    box-shadow var(--t-fast) var(--ease);
 }
 
 .switcher-face:hover:not(:disabled) {
-  background: var(--surface-hover);
-  border-color: var(--line-strong, var(--line));
+  border-color: var(--hairline-strong);
+}
+
+.switcher-face:focus-visible {
+  outline: 2px solid var(--data);
+  outline-offset: 1px;
 }
 
 .switcher-face:disabled {
   cursor: default;
+  box-shadow: none;
+}
+
+/* The monogram. Solid ink, same treatment as the brand mark above it — this
+   IS a brand mark, just for the account rather than the product. */
+.switcher-avatar {
+  position: relative;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  background: var(--ink);
+  color: var(--page);
+  font-size: 12px;
+  font-weight: 640;
+  letter-spacing: -0.02em;
+}
+
+/* The menu's row uses a quieter tile — the ink-solid mark stays reserved for
+   whichever one is actually selected, so scanning the list for "current"
+   only has to check for one solid square. */
+.switcher-avatar-sm {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: var(--surface-hover);
+  color: var(--ink-secondary);
+  font-size: 10.5px;
+}
+
+.switcher-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
 }
 
 .switcher-name {
-  grid-area: name;
-  font-weight: 550;
+  font-weight: 560;
+  letter-spacing: -0.005em;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.switcher-face > .mode-chip {
-  grid-area: mode;
-  justify-self: start;
-}
-
 .switcher-caret {
-  grid-area: caret;
-  font-size: 10px;
-  opacity: 0.5;
+  flex-shrink: 0;
+  color: var(--ink-muted);
+  transition: transform var(--t-fast) var(--ease);
 }
 
 .switcher-menu {
   position: absolute;
-  top: calc(100% + 4px);
+  top: calc(100% + 6px);
   left: 0;
   right: 0;
   z-index: 40;
-  padding: 4px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
+  padding: 5px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius);
   background: var(--surface);
-  box-shadow: 0 8px 24px rgb(0 0 0 / 0.12);
+  box-shadow: var(--shadow-lg);
+  animation: legend-in var(--t-fast) var(--ease);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .switcher-menu {
+    animation: none;
+  }
 }
 
 .switcher-item {
   width: 100%;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 9px;
   padding: 7px 8px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--ink);
   font: inherit;
   font-size: 13px;
   cursor: pointer;
   text-align: left;
+  transition: background var(--t-fast) var(--ease);
 }
 
 .switcher-item:hover {
-  background: var(--surface-2, rgb(128 128 128 / 0.08));
+  background: var(--surface-hover);
+}
+
+.switcher-item + .switcher-item {
+  margin-top: 1px;
 }
 
 .switcher-item.is-current {
-  font-weight: 550;
+  font-weight: 560;
+}
+
+.switcher-item.is-current .switcher-avatar-sm {
+  background: var(--ink);
+  color: var(--page);
 }
 
 .switcher-item-name {
   flex: 1;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-/* The mode chip. `live` alone is not the alarming state — `live` with nothing
-   diverted is, and only that one gets the red treatment. */
-.mode-chip {
+.switcher-check {
   flex-shrink: 0;
-  padding: 2px 6px;
-  border-radius: 5px;
-  font-size: 10.5px;
+  color: var(--data);
+}
+
+/*
+ * The mode pill.
+ *
+ * Dot plus word, on a tinted wash of the same status colour — the exact
+ * language `.pill` uses everywhere else this product shows a state, so the
+ * switcher reads as part of the same system rather than a control with its
+ * own colour rules. `live` alone is not the alarming state — `live` with
+ * nothing diverted is, and only that combination earns the critical tone.
+ */
+.mode-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px 2px 6px;
+  border-radius: 999px;
+  font-size: 11px;
   font-weight: 550;
-  letter-spacing: 0.01em;
+  letter-spacing: 0.002em;
   white-space: nowrap;
-  background: rgb(128 128 128 / 0.12);
-  /* `var(--muted)` was never defined — `.muted` is a class, not a token — so
-     every chip that did not match one of the modifiers below inherited its
-     colour instead of taking one. */
-  color: var(--ink-muted);
+  width: fit-content;
+}
+
+.mode-pill-paused {
+  background: var(--surface-sunken);
+  color: var(--ink-secondary);
+}
+
+.mode-pill-paused .dot {
+  background: var(--ink-muted);
+}
+
+.mode-pill-live {
+  background: color-mix(in srgb, var(--good) 15%, transparent);
+  color: var(--good-text);
+}
+
+.mode-pill-live .dot {
+  background: var(--good);
+}
+
+.mode-pill-danger {
+  background: color-mix(in srgb, var(--critical) 14%, transparent);
+  color: var(--critical);
+}
+
+.mode-pill-danger .dot {
+  background: var(--critical);
+}
+
+.mode-pill-flag {
+  opacity: 0.85;
+  font-weight: 500;
+}
+
+:root:not([data-theme='light']) .mode-pill-danger,
+[data-theme='dark'] .mode-pill-danger {
+  color: rgb(252 165 165);
 }
 
 /* The meta line under a row of metrics: the facts that give the tiles their
@@ -1956,42 +2280,6 @@ table.data tbody tr:last-child td {
   opacity: 0.55;
 }
 
-.mode-dry_run {
-  background: rgb(59 130 246 / 0.13);
-  color: rgb(37 99 235);
-}
-
-.mode-live {
-  background: rgb(16 185 129 / 0.15);
-  color: rgb(5 150 105);
-}
-
-.mode-danger {
-  background: rgb(239 68 68 / 0.15);
-  color: rgb(220 38 38);
-}
-
-.mode-chip-flag {
-  margin-left: 3px;
-  font-weight: 500;
-  opacity: 0.85;
-}
-
-:root:not([data-theme='light']) .mode-dry_run,
-[data-theme='dark'] .mode-dry_run {
-  color: rgb(147 197 253);
-}
-
-:root:not([data-theme='light']) .mode-live,
-[data-theme='dark'] .mode-live {
-  color: rgb(110 231 183);
-}
-
-:root:not([data-theme='light']) .mode-danger,
-[data-theme='dark'] .mode-danger {
-  color: rgb(252 165 165);
-}
-
 /* ── collapsed sidebar ───────────────────────────────────────────────────────
    The switcher STAYS. Hiding it with `display: none` removed a 44px row from
    the flow, so every nav item jumped up on collapse and back down on expand —
@@ -2004,38 +2292,52 @@ table.data tbody tr:last-child td {
   padding: 0 10px 10px;
 }
 
-/* Back to a single centred box at 68px — the two-line grid above has nothing
-   to lay out once the name and the caret are gone. */
 :root[data-sidebar='collapsed'] .switcher-face {
-  display: flex;
   justify-content: center;
-  padding: 8px;
+  padding: 7px;
+  gap: 0;
 }
 
-:root[data-sidebar='collapsed'] .switcher-name,
-:root[data-sidebar='collapsed'] .switcher-caret,
-:root[data-sidebar='collapsed'] .mode-chip-flag {
+:root[data-sidebar='collapsed'] .switcher-text,
+:root[data-sidebar='collapsed'] .switcher-caret {
   display: none;
 }
 
-/* The mode chip becomes a dot: the one fact worth keeping at 68px wide is
-   whether this account can reach real customers. */
-:root[data-sidebar='collapsed'] .mode-chip {
-  width: 8px;
-  height: 8px;
-  padding: 0;
+/*
+ * The status dot: a small notch on the monogram's corner, the one fact worth
+ * keeping at 68px wide once the pill itself has nowhere to sit. Always
+ * rendered, only ever shown collapsed — its border matches the sidebar's own
+ * background so it reads as a cutout in the tile rather than a sticker on it.
+ */
+.switcher-status-dot {
+  display: none;
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
-  font-size: 0;
-  line-height: 0;
-  overflow: hidden;
-  background: currentColor;
+  border: 2px solid var(--sidebar-bg);
+  background: var(--ink-muted);
+}
+
+.switcher-status-dot.is-live {
+  background: var(--good);
+}
+
+.switcher-status-dot.is-danger {
+  background: var(--critical);
+}
+
+:root[data-sidebar='collapsed'] .switcher-status-dot {
+  display: block;
 }
 
 /* The menu still needs room to show names, so it escapes the rail. */
 :root[data-sidebar='collapsed'] .switcher-menu {
   left: 8px;
   right: auto;
-  width: 200px;
+  width: 208px;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -2490,6 +2792,26 @@ table.data-cases td {
 }
 
 /*
+ * The exact words that went out.
+ *
+ * Wrapped, not scrolled sideways: this is prose a person reads to check the
+ * agent said something sane, and a horizontal scrollbar through a paragraph is
+ * the fastest way to make sure nobody ever reads it.
+ */
+.message-preview {
+  margin-top: -8px;
+  padding: 14px 16px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--ink-muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/*
  * The written brief, at the top of the case it is about — sits between the
  * head and the trace, distinguished by a sunken background rather than a
  * loud banner. Reuses `.brief-body` / `.brief-label` / `.brief-foot` from the
@@ -2627,6 +2949,182 @@ table.data-cases td {
 .btn-ghost:hover {
   border-color: var(--hairline-strong);
   color: var(--ink);
+}
+
+.btn-ghost:disabled,
+.btn-primary:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ── going live: the confirmation overlay ─────────────────────────────────── */
+
+/*
+ * Centred, not a side drawer. The drawer is for reading one thing while the
+ * page stays put behind it; this is a decision that has to be made before
+ * anything else happens, and it should sit in the way.
+ */
+.resume-modal {
+  position: fixed;
+  z-index: 60;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(560px, calc(100vw - 32px));
+  max-height: min(80vh, 720px);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg, 12px);
+  box-shadow: var(--shadow-lg, 0 24px 60px rgba(0, 0, 0, 0.22));
+  animation: drawer-fade 0.16s var(--ease);
+}
+
+.resume-head {
+  padding: 22px 24px 16px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.resume-title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.resume-sub {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: var(--ink-secondary);
+}
+
+/* Two buckets, side by side, because the whole decision is their ratio. */
+.resume-split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px;
+  background: var(--hairline);
+  border-bottom: 1px solid var(--hairline);
+}
+
+.resume-bucket {
+  background: var(--surface);
+  padding: 16px 24px 18px;
+}
+
+.resume-bucket-muted {
+  color: var(--ink-secondary);
+}
+
+.resume-count {
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+
+.resume-bucket-label {
+  margin-top: 2px;
+  font-size: 12.5px;
+  font-weight: 520;
+}
+
+.resume-bucket-foot {
+  margin-top: 5px;
+  font-size: 11.5px;
+  color: var(--ink-muted);
+}
+
+/*
+ * Where messages go, stated at the moment someone switches the agent on.
+ *
+ * The tint reinforces the sentence and never carries it alone — the words say
+ * "these reach real people", so the panel reads correctly with no colour at all.
+ */
+.resume-routing {
+  padding: 11px 24px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ink-secondary);
+  background: var(--surface-sunken);
+  border-bottom: 1px solid var(--hairline);
+}
+
+.resume-routing-live {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--critical) 8%, var(--surface));
+}
+
+.resume-note {
+  margin: 0;
+  padding: 12px 24px;
+  font-size: 12.5px;
+  color: var(--ink-secondary);
+  background: var(--surface-sunken);
+  border-bottom: 1px solid var(--hairline);
+}
+
+/* The only part that scrolls, so the counts and the buttons never leave view. */
+.resume-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px 0;
+}
+
+.resume-row {
+  display: grid;
+  grid-template-columns: 10px 78px 120px 1fr;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 24px;
+  font-size: 12px;
+}
+
+.resume-row-amount {
+  font-variant-numeric: tabular-nums;
+  font-weight: 520;
+}
+
+.resume-row-who,
+.resume-row-why {
+  color: var(--ink-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resume-row-more {
+  display: block;
+  color: var(--ink-muted);
+  font-style: italic;
+}
+
+.resume-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 14px 24px;
+  border-top: 1px solid var(--hairline);
+}
+
+@media (max-width: 560px) {
+  .resume-split {
+    grid-template-columns: 1fr;
+  }
+  .resume-row {
+    grid-template-columns: 10px 70px 1fr;
+  }
+  /* The masked contact is the first thing to go: the amount and the reason are
+     what the decision turns on. */
+  .resume-row-who {
+    display: none;
+  }
+  .resume-actions button {
+    flex: 1 1 auto;
+  }
 }
 
 .link-btn {

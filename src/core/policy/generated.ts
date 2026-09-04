@@ -50,8 +50,7 @@ export const RAW_POLICY_ROWS: readonly unknown[] = [
         "at": "3m",
         "action": "nudge",
         "channels": [
-          "whatsapp",
-          "sms"
+          "whatsapp"
         ],
         "intent": "switch_method",
         "suggest": [
@@ -75,8 +74,7 @@ export const RAW_POLICY_ROWS: readonly unknown[] = [
         "at": "26h",
         "action": "nudge",
         "channels": [
-          "email",
-          "sms"
+          "email"
         ],
         "intent": "final_reminder"
       }
@@ -114,8 +112,7 @@ export const RAW_POLICY_ROWS: readonly unknown[] = [
         "at": "3m",
         "action": "nudge",
         "channels": [
-          "whatsapp",
-          "sms"
+          "whatsapp"
         ],
         "intent": "switch_method",
         "suggest": [
@@ -307,8 +304,7 @@ export const RAW_POLICY_ROWS: readonly unknown[] = [
         "at": "26h",
         "action": "nudge",
         "channels": [
-          "whatsapp",
-          "sms"
+          "whatsapp"
         ],
         "intent": "reminder"
       }
@@ -354,8 +350,7 @@ export const RAW_POLICY_ROWS: readonly unknown[] = [
         "at": "26h",
         "action": "nudge",
         "channels": [
-          "whatsapp",
-          "sms"
+          "whatsapp"
         ],
         "intent": "reminder"
       },
@@ -363,8 +358,7 @@ export const RAW_POLICY_ROWS: readonly unknown[] = [
         "at": "3d",
         "action": "nudge",
         "channels": [
-          "email",
-          "sms"
+          "email"
         ],
         "intent": "final_reminder",
         "note": "Third touch lands near the next common salary-credit window. Stage 6 replaces this fixed offset with the payer's observed cycle.\n"
@@ -403,8 +397,7 @@ export const RAW_POLICY_ROWS: readonly unknown[] = [
         "at": "3h",
         "action": "nudge",
         "channels": [
-          "whatsapp",
-          "sms"
+          "whatsapp"
         ],
         "intent": "switch_method",
         "suggest": [
@@ -459,8 +452,7 @@ export const RAW_POLICY_ROWS: readonly unknown[] = [
         "at": "5m",
         "action": "nudge",
         "channels": [
-          "whatsapp",
-          "sms"
+          "whatsapp"
         ],
         "intent": "switch_method",
         "note": "No `suggest` — inherit the rails the diagnosis already worked out, which account for the failing method (e.g. a dead VPA never gets offered UPI).\n"
@@ -507,8 +499,7 @@ export const RAW_POLICY_ROWS: readonly unknown[] = [
         "at": "4m",
         "action": "nudge",
         "channels": [
-          "whatsapp",
-          "sms"
+          "whatsapp"
         ],
         "intent": "switch_method",
         "suggest": [
@@ -534,8 +525,7 @@ export const RAW_POLICY_ROWS: readonly unknown[] = [
         "at": "26h",
         "action": "nudge",
         "channels": [
-          "email",
-          "sms"
+          "email"
         ],
         "intent": "final_reminder"
       }
@@ -573,8 +563,7 @@ export const RAW_POLICY_ROWS: readonly unknown[] = [
         "at": "4m",
         "action": "nudge",
         "channels": [
-          "whatsapp",
-          "sms"
+          "whatsapp"
         ],
         "intent": "bank_action_required",
         "suggest": [
@@ -629,8 +618,7 @@ export const RAW_POLICY_ROWS: readonly unknown[] = [
         "at": "4m",
         "action": "nudge",
         "channels": [
-          "whatsapp",
-          "sms"
+          "whatsapp"
         ],
         "intent": "bank_action_required",
         "suggest": [
@@ -684,8 +672,7 @@ export const RAW_POLICY_ROWS: readonly unknown[] = [
         "at": "4m",
         "action": "nudge",
         "channels": [
-          "whatsapp",
-          "sms"
+          "whatsapp"
         ],
         "intent": "switch_method"
       },
@@ -843,8 +830,7 @@ export const RAW_POLICY_ROWS: readonly unknown[] = [
         "at": "2m",
         "action": "nudge",
         "channels": [
-          "whatsapp",
-          "sms"
+          "whatsapp"
         ],
         "intent": "switch_method",
         "suggest": [
@@ -893,8 +879,7 @@ export const RAW_POLICY_ROWS: readonly unknown[] = [
         "at": "2m",
         "action": "nudge",
         "channels": [
-          "whatsapp",
-          "sms"
+          "whatsapp"
         ],
         "intent": "switch_method",
         "suggest": [
@@ -1082,8 +1067,7 @@ export const RAW_POLICY_ROWS: readonly unknown[] = [
         "at": "25m",
         "action": "nudge",
         "channels": [
-          "whatsapp",
-          "sms"
+          "whatsapp"
         ],
         "intent": "retry_now_service_restored",
         "note": "Earliest permitted touch for this class is 20m — before that they may still be retrying and the bank is probably still down.\n"
@@ -1135,8 +1119,7 @@ export const RAW_POLICY_ROWS: readonly unknown[] = [
         "at": "20m",
         "action": "nudge",
         "channels": [
-          "whatsapp",
-          "sms"
+          "whatsapp"
         ],
         "intent": "retry_now_service_restored",
         "suggest": [
@@ -1161,8 +1144,7 @@ export const RAW_POLICY_ROWS: readonly unknown[] = [
         "at": "26h",
         "action": "nudge",
         "channels": [
-          "email",
-          "sms"
+          "email"
         ],
         "intent": "final_reminder"
       }
@@ -1206,8 +1188,7 @@ export const RAW_POLICY_ROWS: readonly unknown[] = [
         "at": "8h",
         "action": "nudge",
         "channels": [
-          "whatsapp",
-          "sms"
+          "whatsapp"
         ],
         "intent": "retry_now_service_restored",
         "note": "By now the window has closed and quiet hours have passed. The not_quiet_hours precondition defers this if it has not.\n"
@@ -1255,8 +1236,7 @@ export const RAW_POLICY_ROWS: readonly unknown[] = [
         "at": "0m",
         "action": "send_pre_debit_notice",
         "channels": [
-          "whatsapp",
-          "sms"
+          "whatsapp"
         ],
         "leadTime": "24h",
         "note": "RBI pre-debit notification. Must precede the re-presentment."
@@ -1279,8 +1259,7 @@ export const RAW_POLICY_ROWS: readonly unknown[] = [
         "at": "3d",
         "action": "send_pre_debit_notice",
         "channels": [
-          "whatsapp",
-          "sms"
+          "whatsapp"
         ],
         "leadTime": "24h"
       },
@@ -1326,8 +1305,7 @@ export const RAW_POLICY_ROWS: readonly unknown[] = [
         "at": "25m",
         "action": "nudge",
         "channels": [
-          "whatsapp",
-          "sms"
+          "whatsapp"
         ],
         "intent": "subscription_at_risk",
         "note": "No `suggest` — inherit the diagnosis rails, which already exclude anything the cause class forbids. One touch only: the ceiling here is the strictest of the five classes this row covers.\n"

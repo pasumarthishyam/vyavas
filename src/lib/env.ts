@@ -83,6 +83,26 @@ const schema = z.object({
    */
   EMAIL_FROM: z.string().min(1).optional(),
 
+  /**
+   * Signs the dashboard session cookie. HMAC-SHA256, so any high-entropy
+   * string works, but it must be a real secret and it must be stable — rotating
+   * it signs everyone out, which is the intended way to force that.
+   *
+   * 32 characters minimum, checked here rather than trusted. A short secret
+   * produces a forgeable token, and nothing else in the system would complain.
+   *
+   * Optional in the schema only so scripts and tests that never serve a request
+   * can boot without it; `requireSessionSecret()` is what every code path that
+   * actually issues or checks a session goes through, and it refuses when this
+   * is unset. A missing secret always means "nobody is signed in", never
+   * "everybody is".
+   */
+  SESSION_SECRET: z
+    .string()
+    .min(32, 'must be at least 32 characters. Generate one with: ' +
+      "node -e \"console.log(require('crypto').randomBytes(32).toString('base64url'))\"")
+    .optional(),
+
   // ── Claude ──
   ANTHROPIC_API_KEY: z.string().min(1).optional(),
 
@@ -262,6 +282,13 @@ export function requireResendKey(): string {
 
 export function requireAnthropicKey(): string {
   return required('ANTHROPIC_API_KEY', 'console.anthropic.com > API Keys.');
+}
+
+export function requireSessionSecret(): string {
+  return required(
+    'SESSION_SECRET',
+    'Generate 32 random bytes and base64url-encode them. Without it nobody can sign in.',
+  );
 }
 
 export function appUrl(): string {

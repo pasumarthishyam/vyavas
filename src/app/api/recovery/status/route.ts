@@ -13,6 +13,7 @@ import {
   getRecoverableCases,
   getRecoverySummary,
 } from '../../../../db/queries/recovery';
+import { currentUser } from '../../../../lib/auth';
 import { MERCHANT_COOKIE } from '../../../../lib/merchant-context';
 import { fireDueFollowUps } from '../../../../messaging/recovery-run';
 
@@ -64,10 +65,34 @@ export async function GET(request: Request): Promise<NextResponse> {
 
 async function status(request: Request): Promise<NextResponse> {
   const db = getDb();
-  // The account the console is pointed at, never "the first one" — resolved in
-  // a single query rather than the two this route used to make on every poll.
+
+  /*
+   * Who is polling, and what they are allowed to see.
+   *
+   * The middleware has already checked the session signature, but it runs on
+   * the Edge with no database, so it cannot tell whether the user still exists,
+   * is still enabled, or is on the current session epoch. This is that check,
+   * and it is one indexed primary-key lookup.
+   *
+   * It restores a second query to what was deliberately reduced to one — worth
+   * saying plainly rather than leaving as a silent regression. The merchant
+   * lookup below now filters by membership, so the alternative to this query is
+   * a console that hands any signed-in user any merchant's cases for the cost
+   * of editing one cookie.
+   */
+  const user = await currentUser(db);
+  if (!user) {
+    return NextResponse.json({ ok: false, reason: 'unauthenticated' }, { status: 401 });
+  }
+
+  // The account the console is pointed at, never "the first one", and never one
+  // this user is not a member of.
   const jar = await cookies();
-  const merchant = await getConsoleMerchantBySlug(db, jar.get(MERCHANT_COOKIE)?.value ?? null);
+  const merchant = await getConsoleMerchantBySlug(
+    db,
+    jar.get(MERCHANT_COOKIE)?.value ?? null,
+    user.id,
+  );
   if (!merchant) {
     return NextResponse.json({ ok: false, reason: 'no merchant' }, { status: 404 });
   }

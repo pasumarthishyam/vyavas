@@ -41,9 +41,30 @@ export const maxDuration = 60;
  */
 const origin = process.env.APP_URL ?? 'https://www.vyavas.com';
 
+/**
+ * ── and why it is NOT pinned in development ──
+ *
+ * `APP_URL` is the production host. Pinning it unconditionally meant a local
+ * Inngest dev server was told "call me at https://www.vyavas.com/api/inngest",
+ * so every locally-triggered run was executed against the LIVE SITE, which
+ * refused it with a 401 because the dev server does not hold its signing key.
+ *
+ * The symptom is uniquely unhelpful: events publish fine, the dev server logs
+ * `initializing fn`, and then `error handling queue item: invalid status code:
+ * 401` — while the local Next server logs nothing at all, because nothing ever
+ * reached it. Every ladder silently did not run, which on this codebase looks
+ * exactly like a gate that deferred.
+ *
+ * In dev the SDK derives its own origin from the incoming request, which is
+ * localhost and is what we want. The pin only exists for the Vercel apex→www
+ * redirect described above, and that is a production problem.
+ */
+const isDevRuntime =
+  process.env.INNGEST_DEV === '1' || process.env.NODE_ENV !== 'production';
+
 export const { GET, POST, PUT } = serve({
   client: inngest,
   functions: [runLadder, sweepDeadlines, sweepAbandonedCarts],
-  serveOrigin: origin,
+  ...(isDevRuntime ? {} : { serveOrigin: origin }),
   servePath: '/api/inngest',
 });

@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 
 /*
@@ -31,7 +31,12 @@ const GROUPS: { label: string | null; items: { href: string; label: string; icon
   },
 ];
 
-export function Nav({ switcher }: { switcher?: React.ReactNode }) {
+export interface NavUser {
+  email: string;
+  name: string | null;
+}
+
+export function Nav({ switcher, user }: { switcher?: React.ReactNode; user?: NavUser }) {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState<boolean | null>(null);
 
@@ -109,8 +114,58 @@ export function Nav({ switcher }: { switcher?: React.ReactNode }) {
 
       <div className="sidebar-foot">
         <ThemeToggle collapsed={isCollapsed} />
+        {user && <AccountBlock user={user} collapsed={isCollapsed} />}
       </div>
     </aside>
+  );
+}
+
+/**
+ * Who is signed in, and the way out.
+ *
+ * The identity is shown rather than hidden behind a menu for the same reason
+ * the merchant switcher shows its mode on its face: this console can message
+ * real customers, and which account is acting is a fact that should never take
+ * a click to discover.
+ */
+function AccountBlock({ user, collapsed }: { user: NavUser; collapsed: boolean }) {
+  const [busy, setBusy] = useState(false);
+  const router = useRouter();
+
+  async function signOut() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+    } catch {
+      /* The cookie is cleared server-side or not at all; either way, leave. */
+    }
+    // Refresh first: the layout is a server component that renders the shell
+    // only for a signed-in user, and pushing without refreshing would land on a
+    // cached shell for a session that no longer exists.
+    router.refresh();
+    router.push('/login');
+  }
+
+  return (
+    <div className="sidebar-account">
+      <div className="account-who" title={user.email}>
+        <span className="account-avatar" aria-hidden="true">
+          {(user.name ?? user.email).trim().charAt(0).toUpperCase()}
+        </span>
+        <span className="nav-item-label account-email">{user.name ?? user.email}</span>
+      </div>
+      <button
+        className="theme-toggle"
+        onClick={signOut}
+        disabled={busy}
+        title={collapsed ? 'Sign out' : undefined}
+        aria-label="Sign out"
+      >
+        <SignOutIcon />
+        <span className="nav-item-label">{busy ? 'Signing out…' : 'Sign out'}</span>
+      </button>
+    </div>
   );
 }
 
@@ -236,6 +291,26 @@ function CasesIcon() {
     <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
       <rect x="2.25" y="3.25" width="11.5" height="9.5" rx="2" stroke="currentColor" strokeWidth="1.5" />
       <path d="M2.5 6.5h11" stroke="currentColor" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
+function SignOutIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path
+        d="M6 2.5H3.5a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1H6"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+      />
+      <path
+        d="M10.5 5.5 13 8l-2.5 2.5M12.5 8H6"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }

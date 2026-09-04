@@ -48,6 +48,19 @@ export async function fetchOrderPayments(
 
 export interface OrderPaidCheck {
   paid: boolean;
+  /**
+   * Did Razorpay actually answer?
+   *
+   * `paid` alone cannot be trusted to mean "the money arrived", because this
+   * function fails CLOSED — an unreachable API returns `paid: true` so we stay
+   * silent. That is right for deciding whether to send, and badly wrong for
+   * deciding whether to book a recovery: it would record revenue every time
+   * Razorpay had a bad minute.
+   *
+   * False only on the error path. A caller that writes money to the ledger must
+   * check this; a caller that only decides whether to send need not.
+   */
+  confirmed: boolean;
   status: string | null;
   amountPaise: number;
   amountPaidPaise: number;
@@ -70,12 +83,13 @@ export async function isOrderPaid(
     const amountPaid = typeof order.amount_paid === 'number' ? order.amount_paid : 0;
     return {
       paid: order.status === 'paid' || amountPaid > 0,
+      confirmed: true,
       status: order.status ?? null,
       amountPaise: typeof order.amount === 'number' ? order.amount : 0,
       amountPaidPaise: amountPaid,
     };
   } catch {
-    return { paid: true, status: 'unknown', amountPaise: 0, amountPaidPaise: 0 };
+    return { paid: true, confirmed: false, status: 'unknown', amountPaise: 0, amountPaidPaise: 0 };
   }
 }
 
@@ -151,4 +165,53 @@ export function cancelPaymentLink(client: RazorpayClient, linkId: string) {
  */
 export function fetchPaymentLink(client: RazorpayClient, linkId: string) {
   return client.get<RazorpayPaymentLinkEntity>(`/payment_links/${linkId}`);
+}
+
+export interface PaymentLinkPaidCheck {
+  paid: boolean;
+  status: string | null;
+  /** What actually arrived, in paise. 0 when unpaid or unknown. */
+  amountPaidPaise: number;
+}
+
+/**
+ * Is the recovery link this case created paid?
+ *
+ * A companion to `isOrderPaid`, and needed because they answer different
+ * questions. A Razorpay payment link creates its OWN order when it is paid, so
+ * the original failed order stays `created` forever and `isOrderPaid` keeps
+ * answering "no" for a customer who has already paid us. Every rung after that
+ * fired, and the case was eventually written off as lost.
+ *
+ * **This one fails CLOSED to `paid: false`, the opposite of `isOrderPaid`.**
+ * The asymmetry is deliberate and worth stating. `isOrderPaid` treats an API
+ * error as "paid" because the cost of being wrong there is one unsent message,
+ * against a message to someone who already paid. Here the cost of being wrong
+ * runs the other way: a false "paid" marks a case recovered and books revenue
+ * that never arrived, which corrupts the one number a merchant is asked to
+ * trust. An unreachable API must never invent a recovery. The order check above
+ * still holds the "do not message a payer" line on its own.
+ */
+export async function isPaymentLinkPaid(
+  client: RazorpayClient,
+  linkId: string,
+): Promise<PaymentLinkPaidCheck> {
+  try {
+    const link = await fetchPaymentLink(client, linkId);
+    const paid = link.status === 'paid';
+    const amountPaid = typeof link.amount_paid === 'number' ? link.amount_paid : 0;
+    return {
+      paid,
+      status: link.status ?? null,
+      amountPaidPaise: paid
+        ? amountPaid > 0
+          ? amountPaid
+          : typeof link.amount === 'number'
+            ? link.amount
+            : 0
+        : 0,
+    };
+  } catch {
+    return { paid: false, status: null, amountPaidPaise: 0 };
+  }
 }

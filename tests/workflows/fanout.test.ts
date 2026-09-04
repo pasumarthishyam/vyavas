@@ -70,7 +70,6 @@ beforeEach(async () => {
   t = await createTestDb();
   merchantId = await seedMerchant(t.db, {
     executionEnabled: true,
-    dryRun: false,
     // The two settings that used to split the pair. Left at real values so the
     // test proves the fanout rung is immune to them, rather than sidestepping.
     minGapMinutes: 15,

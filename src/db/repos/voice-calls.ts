@@ -54,6 +54,34 @@ export async function getVoiceCall(db: Database, id: string) {
   return rows.at(0) ?? null;
 }
 
+/**
+ * The call a Razorpay payment link was created on.
+ *
+ * Lets an inbound `payment_link.paid` confirm a negotiated payment immediately,
+ * rather than waiting for the end-of-call report (which fires before the
+ * customer has usually paid) or the sweep behind it.
+ */
+export async function getVoiceCallByPaymentLinkId(
+  db: Database,
+  merchantId: string,
+  paymentLinkId: string,
+) {
+  const rows = await db
+    .select()
+    .from(voiceCalls)
+    .where(and(eq(voiceCalls.merchantId, merchantId), eq(voiceCalls.paymentLinkId, paymentLinkId)))
+    .limit(1);
+  return rows.at(0) ?? null;
+}
+
+/** Mark a call's link paid by the call's own row id, not Vapi's call id. */
+export async function markPaymentConfirmedById(db: Database, id: string): Promise<void> {
+  await db
+    .update(voiceCalls)
+    .set({ paymentConfirmedAt: sql`now()`, updatedAt: sql`now()` })
+    .where(eq(voiceCalls.id, id));
+}
+
 export async function updateVoiceCallStatus(
   db: Database,
   vapiCallId: string,

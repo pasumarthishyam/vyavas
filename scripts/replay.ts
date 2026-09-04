@@ -102,9 +102,9 @@ async function main(): Promise<void> {
       // Mirrors gatherFacts: a utility-category recovery message rides the
       // transactional relationship, not a marketing opt-in.
       const eligible: Channel[] = [];
+      // Mirrors `gatherFacts` — only the channels there is a client for.
       const basis = cust?.transactionalBasisAt != null;
       if (cust?.phone && (basis || cust.whatsappOptIn)) eligible.push('whatsapp');
-      if (cust?.phone && (basis || cust.smsOptIn)) eligible.push('sms');
       if (cust?.email && (basis || cust.emailOptIn)) eligible.push('email');
 
       // Evaluated at the moment each rung would fire, not at "now" — quiet
@@ -117,6 +117,9 @@ async function main(): Promise<void> {
         const gate = evaluatePreconditions(resolved.row.preconditions, {
           now: fireAt,
           orderPaid: false,
+          // The replay asks what the CURRENT table would do to a case as it was
+          // detected, so it assumes nothing has been paid yet by construction.
+          paymentLinkPaid: false,
           deadlinePassed: c.deadlineAt != null && fireAt >= c.deadlineAt,
           // The replay walks one case in isolation, so there is no prior touch
           // to be inside a cool-off of, and every rung after the first is a

@@ -15,6 +15,7 @@ import {
   type RazorpayWebhookEnvelope,
   type RazorpayDowntimeEntity,
   type RazorpayPaymentEntity,
+  type RazorpayPaymentLinkEntity,
   isSubscribedEvent,
 } from '../adapters/razorpay/types.js';
 import { extractEntity } from '../adapters/razorpay/webhook.js';
@@ -22,6 +23,7 @@ import type { Database } from '../db/client.js';
 import { markWebhookFailed, markWebhookProcessed } from '../db/repos/webhooks.js';
 import { handleDowntime } from './handlers/downtime.js';
 import { type HandlerContext, handlePaymentFailed } from './handlers/payment-failed.js';
+import { handlePaymentLinkPaid } from './handlers/payment-link.js';
 import { handleCaseAborted, handlePaymentSucceeded } from './handlers/payment-succeeded.js';
 
 export interface ProcessResult {
@@ -97,10 +99,50 @@ export async function processEvent(
       };
     }
 
-    // ──he money arrived: close the case before anything can be sent ──
+    /*
+     * ── the recovery link was paid ──
+     *
+     * Routed separately from the events below, and it has to be: a payment link
+     * creates its OWN order when it is paid, so the `order` entity here is that
+     * new order and never the one that failed. Resolving it the same way as
+     * `order.paid` looked up an order no case has ever carried, found nothing,
+     * and reported `no_live_case` — for a customer who had just paid us.
+     *
+     * The link's `reference_id` is the way back. See handlers/payment-link.ts.
+     */
+    case 'payment_link.paid': {
+      const link = extractEntity<RazorpayPaymentLinkEntity>(envelope, 'payment_link');
+      const payment = extractEntity<RazorpayPaymentEntity>(envelope, 'payment');
+      const r = await handlePaymentLinkPaid(ctx, link, payment);
+
+      // STOP THE LADDER. Same reasoning as `order.paid` below — the gate would
+      // catch this at the next rung, but the next rung can be 26 hours away and
+      // the customer has already paid.
+      if (r.resolvedCaseId) {
+        await ctx.publish?.caseResolved({
+          caseId: r.resolvedCaseId,
+          merchantId: ctx.merchantId,
+          outcome: 'recovered',
+          reason: event,
+        });
+      }
+
+      return {
+        event,
+        handled: true,
+        outcome: r.outcome,
+        caseId: r.caseId,
+        detail: {
+          referenceId: r.referenceId,
+          paymentLinkId: r.paymentLinkId,
+          amountPaise: r.amountPaise,
+        },
+      };
+    }
+
+    // ── the money arrived: close the case before anything can be sent ──
     case 'order.paid':
     case 'payment.captured':
-    case 'payment_link.paid':
     case 'subscription.charged': {
       const payment = extractEntity<RazorpayPaymentEntity>(envelope, 'payment');
       const order = extractEntity<Record<string, unknown>>(envelope, 'order');

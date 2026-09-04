@@ -9,7 +9,7 @@
  * directly and never touch Inngest. Publishing is the caller's decision.
  */
 
-import { inngest } from './client.js';
+import { inngest, runKeyFor } from './client.js';
 import type { CaseDiagnosedData, CaseResolvedData } from './client.js';
 
 export interface PublishResult {
@@ -29,7 +29,15 @@ export interface PublishResult {
 export async function publishCaseDiagnosed(data: CaseDiagnosedData): Promise<PublishResult> {
   if (!data.policyId) return { published: false, reason: 'no policy stamped' };
 
-  await inngest.send({ name: 'case/diagnosed', data: data as unknown as Record<string, unknown> });
+  await inngest.send({
+    name: 'case/diagnosed',
+    // Defaulted here rather than at each call site, so a publisher that does not
+    // know about resumes still produces the key `run-ladder` expects.
+    data: { ...data, runKey: data.runKey ?? runKeyFor(data.caseId) } as unknown as Record<
+      string,
+      unknown
+    >,
+  });
   return { published: true };
 }
 

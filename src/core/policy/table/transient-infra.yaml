@@ -24,7 +24,7 @@
       note: Park until Razorpay reports the outage resolved, or four hours pass.
     - at: 25m
       action: nudge
-      channels: [whatsapp, sms]
+      channels: [whatsapp]
       intent: retry_now_service_restored
       note: >
         Earliest permitted touch for this class is 20m — before that they may
@@ -54,7 +54,7 @@
       timeout: 4h
     - at: 20m
       action: nudge
-      channels: [whatsapp, sms]
+      channels: [whatsapp]
       intent: retry_now_service_restored
       suggest: [retry_same, upi_intent]
       note: >
@@ -67,7 +67,7 @@
       suggest: [upi_intent, other_card]
     - at: 26h
       action: nudge
-      channels: [email, sms]
+      channels: [email]
       intent: final_reminder
   preconditions:
     [order_unpaid, no_live_attempt, consent_ok, not_quiet_hours, within_frequency_cap, channel_deliverable]
@@ -92,7 +92,7 @@
       note: Cutoff windows resolve on their own. Nothing to say to the customer yet.
     - at: 8h
       action: nudge
-      channels: [whatsapp, sms]
+      channels: [whatsapp]
       intent: retry_now_service_restored
       note: >
         By now the window has closed and quiet hours have passed. The

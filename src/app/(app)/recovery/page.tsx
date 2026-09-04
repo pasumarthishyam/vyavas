@@ -1,4 +1,4 @@
-import { getDb } from '../../db/client';
+import { getDb } from '../../../db/client';
 import {
   getAiHealth,
   getConsoleMerchant,
@@ -15,10 +15,10 @@ import {
   type ConsoleMerchant,
   type RecoverableCase,
   type RecoverySummary,
-} from '../../db/queries/recovery';
-import { selectMerchant } from '../../lib/merchant-context';
-import { RecoveryConsole } from '../../components/recovery-console';
-import { Empty } from '../../components/charts';
+} from '../../../db/queries/recovery';
+import { selectMerchant } from '../../../lib/merchant-context';
+import { RecoveryConsole } from '../../../components/recovery-console';
+import { Empty } from '../../../components/charts';
 
 /**
  * The recovery console.

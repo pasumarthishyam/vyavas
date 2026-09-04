@@ -32,7 +32,7 @@
         and stops there.
     - at: 2m
       action: nudge
-      channels: [whatsapp, sms]
+      channels: [whatsapp]
       intent: switch_method
       suggest: [upi_intent, other_card]
       note: >
@@ -63,7 +63,7 @@
       minAffectedCases: 3
     - at: 2m
       action: nudge
-      channels: [whatsapp, sms]
+      channels: [whatsapp]
       intent: switch_method
       suggest: [upi_intent, other_card]
   preconditions:

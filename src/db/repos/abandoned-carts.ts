@@ -68,6 +68,26 @@ export async function getAbandonedCart(db: Database, id: string) {
   return rows.at(0) ?? null;
 }
 
+/**
+ * The cart a Razorpay payment link belongs to.
+ *
+ * Lets an inbound `payment_link.paid` close a cart the moment it arrives,
+ * instead of waiting up to fifteen minutes for the confirmation sweep to ask
+ * Razorpay the same question.
+ */
+export async function getAbandonedCartByPaymentLinkId(
+  db: Database,
+  merchantId: string,
+  paymentLinkId: string,
+) {
+  const rows = await db
+    .select()
+    .from(abandonedCarts)
+    .where(and(eq(abandonedCarts.merchantId, merchantId), eq(abandonedCarts.paymentLinkId, paymentLinkId)))
+    .limit(1);
+  return rows.at(0) ?? null;
+}
+
 export async function recordCartFailure(db: Database, id: string, reason: string): Promise<void> {
   await db
     .update(abandonedCarts)
@@ -75,7 +95,28 @@ export async function recordCartFailure(db: Database, id: string, reason: string
     .where(eq(abandonedCarts.id, id));
 }
 
-export async function recordCartEmailSent(
+/** What the send path did with this cart's one email. `sent` is the only one that reached anybody. */
+export type CartEmailStatus =
+  | 'sent'
+  | 'suppressed'
+  | 'refused'
+  | 'failed'
+  | 'no_channel'
+  | 'not_composed';
+
+/**
+ * The link was created; here is what then happened to the email.
+ *
+ * Was `recordCartEmailSent`, and it stamped `emailSentAt` and nothing else no
+ * matter what the send returned — which is how a cart whose email was
+ * suppressed by a dry run, refused by the frequency cap or rejected by the
+ * provider still showed up on the console as "emailed". The row's `status`
+ * stays `emailed` because that is the CART's lifecycle (a link is live and
+ * something has to sweep it for payment, see `listPendingAbandonedCarts`); the
+ * delivery truth lives in `emailStatus`/`emailDetail`, and `emailSentAt` is now
+ * only ever set when an email genuinely left.
+ */
+export async function recordCartLinkIssued(
   db: Database,
   id: string,
   input: {
@@ -85,6 +126,8 @@ export async function recordCartEmailSent(
     paymentLinkUrl: string;
     paymentLinkAmountPaise: number;
     paymentLinkExpiresAt: Date;
+    emailStatus: CartEmailStatus;
+    emailDetail: string | null;
   },
 ): Promise<void> {
   await db
@@ -97,7 +140,9 @@ export async function recordCartEmailSent(
       paymentLinkUrl: input.paymentLinkUrl,
       paymentLinkAmountPaise: input.paymentLinkAmountPaise,
       paymentLinkExpiresAt: input.paymentLinkExpiresAt,
-      emailSentAt: sql`now()`,
+      emailStatus: input.emailStatus,
+      emailDetail: input.emailDetail?.slice(0, 2000) ?? null,
+      ...(input.emailStatus === 'sent' ? { emailSentAt: sql`now()` } : {}),
       updatedAt: sql`now()`,
     })
     .where(eq(abandonedCarts.id, id));

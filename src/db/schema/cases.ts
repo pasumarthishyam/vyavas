@@ -113,6 +113,27 @@ export const recoveryCases = pgTable(
     currentRung: smallint('current_rung').notNull().default(0),
     messagesSent: smallint('messages_sent').notNull().default(0),
 
+    /**
+     * How many times this case has been resumed after a pause.
+     *
+     * Two jobs, and the second is the load-bearing one.
+     *
+     * It makes the Inngest run key unique per resume. `run-ladder` is declared
+     * `idempotency: 'event.data.runKey'`, which is what stops a duplicate
+     * `case/diagnosed` starting a second ladder and doubling every message.
+     * Republishing the SAME key to resume would be silently swallowed by that
+     * guard, and the case would sit in `executing` with no run behind it —
+     * paused forever, with the console showing it as running.
+     *
+     * And incrementing it is the CLAIM. The resume path is
+     * `UPDATE … SET resume_count = resume_count + 1 WHERE state = 'paused'`,
+     * so of the two things that can resume a case (a person switching the
+     * account back to live, and the sweep that catches what that missed)
+     * exactly one wins the row. Without it both would publish, and Inngest
+     * would start two ladders on one case.
+     */
+    resumeCount: smallint('resume_count').notNull().default(0),
+
     deadlineAt: timestamp('deadline_at', { withTimezone: true }),
     resolvedAt: timestamp('resolved_at', { withTimezone: true }),
     recoveredAmountPaise: bigint('recovered_amount_paise', { mode: 'number' }),

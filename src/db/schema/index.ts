@@ -1,5 +1,6 @@
 export * from './enums.js';
 export * from './tenancy.js';
+export * from './auth.js';
 export * from './customers.js';
 export * from './cases.js';
 export * from './messaging.js';

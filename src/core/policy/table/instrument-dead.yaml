@@ -16,7 +16,7 @@
   ladder:
     - at: 5m
       action: nudge
-      channels: [whatsapp, sms]
+      channels: [whatsapp]
       intent: switch_method
       note: >
         No `suggest` — inherit the rails the diagnosis already worked out, which
@@ -43,7 +43,7 @@
   ladder:
     - at: 4m
       action: nudge
-      channels: [whatsapp, sms]
+      channels: [whatsapp]
       intent: switch_method
       suggest: [upi_intent, other_card]
       attachPaymentLink: true
@@ -57,7 +57,7 @@
       suggest: [upi_intent, other_card]
     - at: 26h
       action: nudge
-      channels: [email, sms]
+      channels: [email]
       intent: final_reminder
   preconditions:
     [order_unpaid, no_live_attempt, consent_ok, not_quiet_hours, within_frequency_cap, channel_deliverable]
@@ -78,7 +78,7 @@
   ladder:
     - at: 4m
       action: nudge
-      channels: [whatsapp, sms]
+      channels: [whatsapp]
       intent: bank_action_required
       suggest: [upi_intent, other_card]
       note: >
@@ -107,7 +107,7 @@
   ladder:
     - at: 4m
       action: nudge
-      channels: [whatsapp, sms]
+      channels: [whatsapp]
       intent: bank_action_required
       suggest: [upi_intent, other_card]
     - at: 8h
@@ -135,7 +135,7 @@
   ladder:
     - at: 4m
       action: nudge
-      channels: [whatsapp, sms]
+      channels: [whatsapp]
       intent: switch_method
     - at: 8h
       action: nudge

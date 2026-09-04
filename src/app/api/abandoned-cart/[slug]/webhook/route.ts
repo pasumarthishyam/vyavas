@@ -121,11 +121,22 @@ export async function POST(
     return NextResponse.json({ ok: false, reason: 'merchant not found' }, { status: 404 });
   }
 
-  // The master switch. Off means the row is recorded — the merchant's app did
-  // its job — but nothing external happens, same contract as everywhere else
-  // this flag is read.
+  /*
+   * Paused. The row is recorded — the merchant's app did its job — and nothing
+   * external happens.
+   *
+   * Worth being plain about the limit here, because it differs from the failed-
+   * payment agent. A recovery case parks in `paused` and is picked up again on
+   * resume; a cart does not. It stays `detected`, and going live does not go
+   * back for it. The merchant's app fires this webhook once per cart, and
+   * emailing someone about a cart they abandoned days ago, whenever an operator
+   * happened to unpause, is worse than not emailing them at all.
+   *
+   * The row is still retryable by the same `cartId` if they want it: `detected`
+   * is one of the two statuses this endpoint will process on a repeat call.
+   */
   if (!merchant.executionEnabled) {
-    return NextResponse.json({ ok: true, cartId: row.id, skipped: 'agent_disabled', status: row.status });
+    return NextResponse.json({ ok: true, cartId: row.id, skipped: 'agent_paused', status: row.status });
   }
 
   const result = await processAbandonedCart(db, {
@@ -133,7 +144,6 @@ export async function POST(
     merchantId: merchant.id,
     merchantName: merchant.name,
     frequencyCapPerDay: merchant.frequencyCapPerDay,
-    dryRun: merchant.dryRun,
     amountPaise: row.amountPaise,
     customerName: row.customerName,
     customerEmail: row.customerEmail,
@@ -151,8 +161,13 @@ export async function POST(
     discountAmountPaise: result.discountAmountPaise,
     payableAmountPaise: result.payableAmountPaise,
     paymentLinkUrl: result.paymentLinkUrl,
+    // `emailed` is the merchant's own integration test: false with a reason
+    // beside it, rather than a bare true that only meant "we got as far as
+    // trying". Their app can log this and see a dry run or a capped customer
+    // for what it is.
     emailed: result.emailed,
-    dryRun: merchant.dryRun,
+    emailStatus: result.emailStatus,
+    ...(result.emailDetail ? { emailDetail: result.emailDetail } : {}),
   });
 }
 

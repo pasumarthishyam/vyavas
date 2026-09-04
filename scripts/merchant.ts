@@ -15,6 +15,9 @@
  *   npm run merchant -- email --slug tradesmetrix \
  *       --resend-key re_xxx --from "Tradesmetrix <payments@updates.tradesmetrix.com>"
  *
+ *   npm run merchant -- mode --slug tradesmetrix --set paused
+ *   npm run merchant -- mode --slug sandbox --set live
+ *
  *   npm run merchant -- routing --slug sandbox \
  *       --whatsapp-to 918977629575 --email-to you@example.com
  *   npm run merchant -- routing --slug tradesmetrix --whatsapp-to none --email-to none
@@ -48,7 +51,23 @@ function arg(name: string): string | undefined {
   if (eq) return eq.slice(name.length + 3);
 
   const npm = process.env[`npm_config_${name.replace(/-/g, '_')}`];
-  return npm && npm.length > 0 ? npm : undefined;
+  // 'true' is npm having SWALLOWED the flag (it does that on PowerShell) and
+  // coerced it to a boolean, not a value anyone typed. Reading it back produced
+  // errors like `No merchant 'true'`, which names neither the cause nor the fix.
+  return npm && npm.length > 0 && npm !== 'true' ? npm : undefined;
+}
+
+/**
+ * npm stripped our flags before the script ever ran.
+ *
+ * `npm run merchant -- mode --slug x --set live` survives under bash and is
+ * mangled under PowerShell. Detected rather than guessed at, so the message can
+ * say what to run instead of failing somewhere further down with a wrong value.
+ */
+function mangledByNpm(): boolean {
+  const named = ['slug', 'set', 'mode', 'key', 'secret', 'name', 'from', 'role'];
+  const sawAnyFlag = process.argv.slice(2).some((a) => a.startsWith('--'));
+  return !sawAnyFlag && named.some((n) => process.env[`npm_config_${n}`] === 'true');
 }
 
 function required(name: string): string {
@@ -70,6 +89,23 @@ const command = process.argv[2] ?? 'list';
 const { sql: rawSql, db } = createClient({ max: 1 });
 
 async function main(): Promise<void> {
+  if (mangledByNpm()) {
+    const passed = process.argv.slice(2).join(' ') || '(nothing)';
+    console.error(
+      [
+        '',
+        '  npm removed the flags before this script ran (it does that on PowerShell).',
+        `  It received: ${passed}`,
+        '',
+        '  Run it directly instead — same arguments, no npm in the middle:',
+        '',
+        '    npx tsx scripts/merchant.ts mode --slug sandbox --set live',
+        '',
+      ].join('\n'),
+    );
+    process.exit(1);
+  }
+
   switch (command) {
     case 'list':
       return list();
@@ -79,12 +115,14 @@ async function main(): Promise<void> {
       return connect();
     case 'email':
       return email();
+    case 'mode':
+      return mode();
     case 'routing':
       return routing();
     case 'rename':
       return rename();
     default:
-      console.error(`\n  Unknown command '${command}'. Try: list | create | connect | email | routing | rename\n`);
+      console.error(`\n  Unknown command '${command}'. Try: list | create | connect | email | mode | routing | rename\n`);
       process.exit(1);
   }
 }
@@ -107,7 +145,7 @@ async function list(): Promise<void> {
 
   console.log('');
   for (const { m, c } of rows) {
-    const mode = !m.executionEnabled ? 'OFF' : m.dryRun ? 'DRY RUN' : 'LIVE';
+    const mode = m.executionEnabled ? 'LIVE' : 'PAUSED';
     console.log(`  ${m.name}  (${m.slug})`);
     console.log(`    sending    ${mode}`);
     console.log(
@@ -138,10 +176,9 @@ async function create(): Promise<void> {
     .values({
       name,
       slug,
-      // A new merchant starts switched off and in dry run. Turning it on is a
-      // deliberate act, never a default.
+      // A new merchant starts PAUSED. Going live is a deliberate act, never a
+      // default — this is the guarantee that survived the removal of dry run.
       executionEnabled: false,
-      dryRun: true,
     })
     .returning({ id: merchants.id });
 
@@ -222,6 +259,50 @@ async function email(): Promise<void> {
   console.log(`\n  ${merchant.name} → email`);
   console.log(`    resend key  ${mask(key)}  encrypted`);
   console.log(`    from        ${from ?? '(unchanged)'}\n`);
+}
+
+/**
+ * Pause or resume an account from a terminal.
+ *
+ *   npm run merchant -- mode --slug tradesmetrix --set paused
+ *
+ * The console switch is the normal way to do this. This exists for the times
+ * the console is not the right tool: pausing an account you cannot currently
+ * sign in to, or setting the mode as part of a deploy.
+ *
+ * One difference worth knowing. The console's switch resumes this merchant's
+ * parked cases the instant you press it; this only writes the flag. The
+ * fifteen-minute sweep is what picks them up afterwards, so going live from
+ * here is correct but not immediate.
+ */
+async function mode(): Promise<void> {
+  const slug = required('slug');
+  const set = (arg('set') ?? '').toLowerCase();
+
+  if (set !== 'paused' && set !== 'live') {
+    console.error('\n  --set must be either "paused" or "live"\n');
+    process.exit(1);
+  }
+
+  const updated = await db
+    .update(merchants)
+    .set({ executionEnabled: set === 'live', updatedAt: sql`now()` })
+    .where(and(eq(merchants.slug, slug), sql`${merchants.deletedAt} is null`))
+    .returning({ name: merchants.name });
+
+  const row = updated.at(0);
+  if (!row) {
+    console.error(`\n  No merchant '${slug}'\n`);
+    process.exit(1);
+  }
+
+  console.log(`\n  ${row.name} is now ${set.toUpperCase()}.`);
+  if (set === 'live') {
+    console.log('  Parked cases resume on the next sweep (within 15 minutes),');
+    console.log('  or immediately if you use the switch in the console instead.\n');
+  } else {
+    console.log('  Cases in flight are parked, not cancelled. Nothing is sent.\n');
+  }
 }
 
 async function routing(): Promise<void> {

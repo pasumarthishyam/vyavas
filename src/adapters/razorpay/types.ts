@@ -131,9 +131,22 @@ export interface RazorpayDowntimeEntity extends Record<string, unknown> {
 export interface RazorpayPaymentLinkEntity extends Record<string, unknown> {
   id?: string;
   amount?: number;
+  /** What has actually been collected. A link may be partially paid. */
+  amount_paid?: number;
   currency?: string;
   status?: 'created' | 'partially_paid' | 'expired' | 'cancelled' | 'paid';
   short_url?: string;
+  /**
+   * OUR id for whatever this link is recovering, set at creation.
+   *
+   * The only reliable way back from a paid link to the thing it belongs to.
+   * Three different agents create links and each puts its own row's UUID here:
+   * the ladder writes a `recovery_cases.id`, the abandoned-cart agent an
+   * `abandoned_carts.id`, the discount caller a `voice_calls.id`. The
+   * `order_id` below is the link's OWN order, created by Razorpay when the link
+   * was paid — it is never the order that originally failed, which is why
+   * resolving a `payment_link.paid` by order id never found anything.
+   */
   reference_id?: string;
   order_id?: string | null;
   expire_by?: number;
