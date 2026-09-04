@@ -382,11 +382,32 @@ const KNOWN_EVENT_KINDS = Object.keys(EVENT_CATEGORY);
  * merging in SQL would mean casting both into a lowest common denominator that
  * loses the fields the UI actually renders.
  */
+export interface ActivityFeed {
+  rows: ActivityRow[];
+  /**
+   * There is more history than this page shows.
+   *
+   * Detected by asking each table for ONE row more than the limit and throwing
+   * it away, rather than by counting. Two `count(*)` scans on a feed the console
+   * re-polls every four seconds is real load for a number nobody acts on; a
+   * spare row is free.
+   *
+   * It exists because the panel header used to read "40 events · every action
+   * recorded" whether the ledger held forty rows or four thousand — a truncated
+   * page describing itself as complete, which is the one thing an audit trail
+   * must never do.
+   */
+  hasMore: boolean;
+}
+
 export async function getRecentActivity(
   db: Database,
   merchantId: string,
   limit = 25,
-): Promise<ActivityRow[]> {
+): Promise<ActivityFeed> {
+  // One past the limit, from each side. Whichever rows survive the merge, if
+  // more than `limit` came back there is more history behind them.
+  const probe = limit + 1;
   const [messages, decisions] = await Promise.all([
     /*
      * `body` is deliberately NOT selected.
@@ -412,19 +433,22 @@ export async function getRecentActivity(
       .from(messageLog)
       .where(eq(messageLog.merchantId, merchantId))
       .orderBy(desc(messageLog.sentAt))
-      .limit(limit),
+      .limit(probe),
     // No kind filter: everything the system recorded appears. See EVENT_CATEGORY.
     db
       .select()
       .from(caseEvents)
       .where(eq(caseEvents.merchantId, merchantId))
       .orderBy(desc(caseEvents.occurredAt))
-      .limit(limit),
+      .limit(probe),
   ]);
 
-  const rows: ActivityRow[] = [...messages.map(toMessageActivity), ...decisions.map(toDecisionActivity)];
+  const merged: ActivityRow[] = [
+    ...messages.map(toMessageActivity),
+    ...decisions.map(toDecisionActivity),
+  ].sort((a, b) => b.at.getTime() - a.at.getTime());
 
-  return rows.sort((a, b) => b.at.getTime() - a.at.getTime()).slice(0, limit);
+  return { rows: merged.slice(0, limit), hasMore: merged.length > limit };
 }
 
 type MessageRow = Pick<

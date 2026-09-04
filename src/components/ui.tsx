@@ -11,6 +11,18 @@ import { formatINR, type Paise } from '../core/money';
 
 export const inr = (p: number, compact = true) => formatINR(p as Paise, { compact });
 
+/**
+ * A phone number safe to put on a screen someone might screenshot.
+ *
+ * Shared rather than duplicated: it is used by the routing banner and by the
+ * go-live confirmation, and two copies of a masking rule is one copy that
+ * eventually stops masking.
+ */
+export function maskPhone(phone: string): string {
+  if (phone.length <= 7) return phone;
+  return `${phone.slice(0, 3)}•••••${phone.slice(-4)}`;
+}
+
 // ─── stat tile ───────────────────────────────────────────────────────────────
 
 export function Stat({

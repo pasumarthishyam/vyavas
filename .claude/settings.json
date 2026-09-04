@@ -104,7 +104,9 @@
       "Bash(curl -s -o /dev/null -w \"  https://www.vyavas.com/login          -> %{http_code}\\\\n\" https://www.vyavas.com/login)",
       "Bash(curl -s -o /dev/null -w \"  https://www.vyavas.com/recovery       -> %{http_code} %{redirect_url}\\\\n\" https://www.vyavas.com/recovery)",
       "Bash(curl -s \"https://www.vyavas.com/api/webhooks/razorpay/sandbox\")",
-      "Bash(curl -s \"https://www.vyavas.com/api/inngest\")"
+      "Bash(curl -s \"https://www.vyavas.com/api/inngest\")",
+      "Bash(awk 'NR>=1516 && /^}$/ {print NR; exit}' src/components/recovery-console.tsx)",
+      "Bash(awk 'NR>=1671 && /^}$/ {print \"second fragment ends at line\", NR; exit}' src/components/recovery-console.tsx)"
     ],
     "additionalDirectories": [
       "C:\\Users\\Hp\\Documents\\Vyavas_AIrecovery\\scripts"

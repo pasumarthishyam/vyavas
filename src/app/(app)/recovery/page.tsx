@@ -47,6 +47,7 @@ interface Loaded {
   merchant: ConsoleMerchant | null;
   cases: RecoverableCase[];
   activity: ActivityRow[];
+  activityHasMore: boolean;
   summary: RecoverySummary;
   escalations: ConsoleEscalation[];
   alerts: ConsoleAlert[];
@@ -72,6 +73,7 @@ const EMPTY_AI: AiHealth = {
 const EMPTY: Omit<Loaded, 'merchant' | 'failed'> = {
   cases: [],
   activity: [],
+  activityHasMore: false,
   summary: EMPTY_SUMMARY,
   escalations: [],
   alerts: [],
@@ -89,7 +91,7 @@ async function load(): Promise<Loaded> {
       return { merchant: null, ...EMPTY, failed: false };
     }
 
-    const [cases, activity, summary, escalations, alerts, ai, escalatedCaseIds] =
+    const [cases, feed, summary, escalations, alerts, ai, escalatedCaseIds] =
       await Promise.all([
         getRecoverableCases(db, merchant.id),
         getRecentActivity(db, merchant.id, 40),
@@ -100,7 +102,18 @@ async function load(): Promise<Loaded> {
         getEscalatedCaseIds(db, merchant.id),
       ]);
 
-    return { merchant, cases, activity, summary, escalations, alerts, ai, escalatedCaseIds, failed: false };
+    return {
+      merchant,
+      cases,
+      activity: feed.rows,
+      activityHasMore: feed.hasMore,
+      summary,
+      escalations,
+      alerts,
+      ai,
+      escalatedCaseIds,
+      failed: false,
+    };
   } catch {
     // Deliberately swallowed. The client poll is the recovery path, and it
     // reports its own failures — surfacing this one too would show two banners

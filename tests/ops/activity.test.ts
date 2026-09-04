@@ -124,7 +124,7 @@ describe('getRecentActivity', () => {
     await event('detected');
     await event('aborted', { reason: 'already_paid' });
 
-    const rows = await getRecentActivity(t.db, merchantId, 50);
+    const rows = (await getRecentActivity(t.db, merchantId, 50)).rows;
     const kinds = rows.filter((r) => r.kind === 'decision').map((r) => r.event);
 
     for (const k of ['payment_received', 'escalated', 'merchant_alerted', 'detected', 'aborted']) {
@@ -137,7 +137,7 @@ describe('getRecentActivity', () => {
       payload: { queue: 'risk_review', briefSource: 'claude' } as never,
     });
 
-    const [row] = await getRecentActivity(t.db, merchantId, 50);
+    const [row] = (await getRecentActivity(t.db, merchantId, 50)).rows;
     expect(row?.kind).toBe('decision');
     if (row?.kind === 'decision') {
       expect(row.category).toBe('ai');
@@ -159,7 +159,7 @@ describe('getRecentActivity', () => {
       } as never,
     });
 
-    const [row] = await getRecentActivity(t.db, merchantId, 50);
+    const [row] = (await getRecentActivity(t.db, merchantId, 50)).rows;
     if (row?.kind === 'decision') {
       expect(row.detail).toContain('fell back');
       expect(row.detail).toContain('invalid x-api-key');
@@ -171,7 +171,7 @@ describe('getRecentActivity', () => {
       payload: { signal: 'bank_not_enabled:all:upi', raised: false } as never,
     });
 
-    const [row] = await getRecentActivity(t.db, merchantId, 50);
+    const [row] = (await getRecentActivity(t.db, merchantId, 50)).rows;
     if (row?.kind === 'decision') expect(row.detail).toContain('nothing raised');
   });
 });
@@ -199,7 +199,7 @@ describe('the trail cannot leak personal data', () => {
       body: 'Hi Rahul, your payment of Rs 9,588 failed. Pay here: https://rzp.io/i/SECRET99',
     });
 
-    const rows = await getRecentActivity(t.db, merchantId, 50);
+    const rows = (await getRecentActivity(t.db, merchantId, 50)).rows;
     const serialised = JSON.stringify(rows);
 
     expect(serialised).not.toContain('Rahul');
@@ -213,7 +213,7 @@ describe('the trail cannot leak personal data', () => {
       error: 'Message undeliverable to +919876543210 (131026)',
     });
 
-    const rows = await getRecentActivity(t.db, merchantId, 50);
+    const rows = (await getRecentActivity(t.db, merchantId, 50)).rows;
     const msg = rows.find((r) => r.kind === 'message');
 
     expect(msg?.kind).toBe('message');
@@ -232,7 +232,7 @@ describe('the trail cannot leak personal data', () => {
       payload: { note: 'could not reach rahul@example.com or +919876543210' } as never,
     });
 
-    const rows = await getRecentActivity(t.db, merchantId, 50);
+    const rows = (await getRecentActivity(t.db, merchantId, 50)).rows;
     const serialised = JSON.stringify(rows);
 
     expect(serialised).not.toContain('rahul@example.com');
@@ -245,7 +245,7 @@ describe('the trail cannot leak personal data', () => {
   it('leaves the case id intact so it can still be looked up', async () => {
     await event('rung_deferred', { reason: 'inside the merchant quiet-hours window' });
 
-    const rows = await getRecentActivity(t.db, merchantId, 50);
+    const rows = (await getRecentActivity(t.db, merchantId, 50)).rows;
     expect(rows[0]?.caseId).toBe(caseId);
   });
 

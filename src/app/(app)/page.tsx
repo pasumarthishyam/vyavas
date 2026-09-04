@@ -14,6 +14,7 @@ import {
 import { Bars, Empty, Heatmap, Trend } from '../../components/charts';
 import { Alert, Delta, Stat, StatePill, causeHint, causeLabel, inr, relativeTime } from '../../components/ui';
 import { DateRangeFilter } from '../../components/date-range-filter';
+import { SendModeSwitch } from '../../components/send-mode-switch';
 import { resolveDateRange } from '../../lib/date-range';
 import { selectMerchant } from '../../lib/merchant-context';
 
@@ -70,6 +71,20 @@ export default async function OverviewPage({
           <h1>Revenue at risk</h1>
         </div>
         <div className="page-head-controls">
+          {/*
+            The send switch lives here, not on an agent's page.
+            `merchants.execution_enabled` gates the failed-payment ladder, the
+            abandoned-cart agent and the discount caller alike, so the account-
+            level page is where it belongs. It was on `/recovery` for historical
+            reasons and read there as that one agent's control.
+          */}
+          <SendModeSwitch
+            executionEnabled={merchant.executionEnabled}
+            routing={{
+              whatsappRedirectTo: merchant.whatsappRedirectTo,
+              emailRedirectTo: merchant.emailRedirectTo,
+            }}
+          />
           <DateRangeFilter
             key={resolved.preset ?? `${resolved.customFrom}_${resolved.customTo}`}
             preset={resolved.preset}
@@ -78,8 +93,6 @@ export default async function OverviewPage({
           />
           <div className="subtle" style={{ textAlign: 'right' }}>
             {resolved.label}
-            <br />
-            <span className="muted">Read-only · nothing is sent</span>
           </div>
         </div>
       </div>
