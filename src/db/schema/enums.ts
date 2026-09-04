@@ -81,14 +81,18 @@ export const voiceCallStatusEnum = pgEnum('voice_call_status', [
 ]);
 
 /**
- * `suppressed` is not a failure and not a success.
+ * `suppressed` is currently WRITTEN BY NOTHING, and is kept on purpose.
  *
- * It is a cart this agent deliberately declined to act on because the same
- * customer already has a payment failure being recovered — see
- * `core/guards/cart-suppression.ts`. Folding it into `failed` would put a
- * correct decision in the same bucket as a broken Razorpay call, and hide the
- * single most useful number this agent has: how often the merchant's app
- * reports a "cart" that is really a decline.
+ * It was added for a guard that declined a cart when the same customer already
+ * had a payment failure in flight. That guard was too blunt — it keyed on the
+ * customer and a time window rather than on the specific checkout, so a repeat
+ * customer's genuine abandoned cart was suppressed alongside the duplicate —
+ * and it has been removed. The agent emails every cart the merchant reports.
+ *
+ * The value stays for two reasons. Rows already carry it, so the console must
+ * still be able to render them. And a Postgres enum value cannot be dropped
+ * without recreating the type and rewriting every row that uses it, which is a
+ * migration far more dangerous than an unused label.
  */
 export const abandonedCartStatusEnum = pgEnum('abandoned_cart_status', [
   'detected',
