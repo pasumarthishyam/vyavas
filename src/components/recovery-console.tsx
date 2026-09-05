@@ -458,10 +458,9 @@ export function RecoveryConsole({ initial }: { initial: Payload }) {
         </div>
       )}
 
-      <NeedsAPerson
+      <AccountAlerts alerts={data.alerts ?? []} />
+      <EscalationToasts
         escalations={data.escalations ?? []}
-        alerts={data.alerts ?? []}
-        ai={data.ai}
         cases={data.cases}
         onOpenCase={setOpenCase}
       />
@@ -1649,61 +1648,24 @@ const SEVERITY_TONE: Record<string, string> = {
 };
 
 /**
- * The two things the agent produced that it is NOT allowed to act on alone:
- * cases handed to a person, and breakage a merchant has to decide about.
- *
- * Rendered ABOVE the case table and never collapsed away when non-empty, unlike
- * Activity. The distinction is what each panel is for — Activity is a trace you
- * consult, this is work that is waiting. A queue behind a closed disclosure is
- * a queue that gets ignored, which is the exact failure this replaced: before
- * it, `escalate_to_human` wrote a row that no screen in the product read.
- *
- * ── a queue, not a stack of full briefs ──
- *
- * This used to render the whole written brief inline, per item — sensible with
- * one escalation, unreadable with ten: the queue became a scroll of paragraphs
- * with the thing you actually came here for (which case needs me?) buried
- * between them. The brief now lives where it is actually about something — at
- * the top of that case's own drawer, see `DrawerBrief` — and this panel goes
- * back to being what a queue should be: one scannable line per item, click to
- * open the one you want. An alert has no single case to open into, so its row
- * stays informational rather than clickable.
- *
- * ── the provenance badge ──
- *
- * Every brief carries whether Claude wrote it or the deterministic fallback
- * did. That is not decoration. Every AI job here fails soft by design — an
- * unreachable model, an expired key, a rejected schema and a validation failure
- * all end in the same fallback, and the entry still appears. Without the badge,
- * a completely broken integration and a working one look identical from this
- * screen, and the queue would quietly stop being worth reading.
+ * Breakage a merchant has to decide about — a bank down, a gateway
+ * misconfigured. Genuinely a standing panel: an outage does not stop being
+ * true five minutes after it starts, so unlike an escalation it earns a
+ * permanent spot rather than a one-time notice. See `EscalationToasts` for
+ * the other half of what used to live here.
  */
-function NeedsAPerson({
-  escalations,
-  alerts,
-  ai,
-  cases,
-  onOpenCase,
-}: {
-  escalations: ConsoleEscalation[];
-  alerts: ConsoleAlert[];
-  ai?: AiHealth;
-  cases: RecoverableCase[];
-  onOpenCase: (c: RecoverableCase) => void;
-}) {
-  const total = escalations.length + alerts.length;
+function AccountAlerts({ alerts }: { alerts: ConsoleAlert[] }) {
   // Nothing to show, nothing to say — a panel that exists only to announce
   // it has nothing in it is a line of chrome on every single load.
-  if (total === 0) return null;
+  if (alerts.length === 0) return null;
 
   return (
     <section className="panel" style={{ marginTop: 20 }}>
       <div className="panel-head">
         <span className="panel-title">
-          Needs a person
-          <span className="count-badge">{total}</span>
+          Needs your attention
+          <span className="count-badge">{alerts.length}</span>
         </span>
-        <AiBadge ai={ai} />
       </div>
 
       <div className="queue-list" style={{ maxHeight: 340, overflowY: 'auto' }}>
@@ -1722,88 +1684,152 @@ function NeedsAPerson({
             </div>
           </div>
         ))}
-
-        {escalations.map((e) => {
-          const matched = cases.find((c) => c.id === e.caseId);
-          return (
-            <button
-              type="button"
-              key={e.id}
-              className="queue-row queue-row-clickable"
-              disabled={!matched}
-              title={matched ? undefined : 'This case is no longer open'}
-              onClick={() => matched && onOpenCase(matched)}
-            >
-              <span className="dot" style={{ background: 'var(--warning)' }} />
-              <div className="queue-row-main">
-                <div className="queue-row-title">{e.headline}</div>
-                <div className="queue-row-meta">
-                  {QUEUE_LABEL[e.queue] ?? e.queue} · {inr(e.amountPaise)} ·{' '}
-                  {causeLabel(e.causeClass)} · {relativeTime(new Date(e.createdAt))}
-                </div>
-              </div>
-              <span
-                className="pill"
-                title={
-                  e.briefSource === 'claude'
-                    ? `Written by Claude${e.briefConfidence ? ` · ${e.briefConfidence} confidence` : ''}`
-                    : (e.briefError ?? 'Written without the model')
-                }
-              >
-                <span
-                  className="dot"
-                  style={{ background: e.briefSource === 'claude' ? 'var(--good)' : 'var(--ink-muted)' }}
-                />
-                {e.briefSource === 'claude' ? 'Claude' : 'Fallback'}
-              </span>
-              <ChevronIcon open={false} />
-            </button>
-          );
-        })}
       </div>
     </section>
   );
 }
 
 /**
- * Is the AI actually running?
+ * A NEW escalation, announced once and briefly — not a standing panel.
  *
- * The honest answer without calling the API: how many briefs the model wrote
- * versus how many fell back, and the most recent reason one fell back. A run of
- * nothing but fallbacks is an expired key or a rejected request — both of which
- * are invisible everywhere else, because failing soft is the whole design.
+ * The panel this replaced listed every open escalation forever, including one
+ * from five days ago, sitting at full size on every load whether or not
+ * anything had actually changed. That is not a queue a person watches, it is
+ * wallpaper — the one item that is genuinely new is indistinguishable from
+ * four that have been sitting there since last week, and the panel is the
+ * same size and the same loudness regardless.
+ *
+ * The backlog has not gone anywhere: the "Needs a person" filter in the
+ * toolbar below still finds every open escalation, old or new, any time
+ * someone wants to work through it. What lives here is only the moment ONE
+ * MORE arrives — a small corner toast, gone once it has been seen (clicked
+ * open, dismissed, or simply given a few seconds to register), so the
+ * ongoing signal is "something just happened" rather than "here is
+ * everything that has ever happened."
+ *
+ * ── why the first poll never toasts anything ──
+ *
+ * The console's first read of `escalations` is the EXISTING backlog, not
+ * something that just occurred — opening the page with three escalations
+ * already open must not detonate three toasts at once. Only an id that
+ * appears on a LATER poll, one this component has not already recorded as
+ * seen, is actually new.
  */
-function AiBadge({ ai }: { ai?: AiHealth }) {
-  if (!ai) return null;
+const ESCALATION_TOAST_TTL_MS = 10_000;
 
-  if (!ai.configured) {
-    return (
-      <span className="card-sub" title="Set ANTHROPIC_API_KEY to enable written briefs">
-        AI off · briefs are deterministic
-      </span>
-    );
-  }
+interface EscalationToastItem {
+  id: string;
+  caseId: string;
+  headline: string;
+  amountPaise: number;
+}
 
-  const total = ai.briefsByClaude + ai.briefsByFallback;
-  if (total === 0) {
-    return (
-      <span className="card-sub" title="No case has escalated yet">
-        AI on · nothing written yet
-      </span>
-    );
-  }
+function EscalationToasts({
+  escalations,
+  cases,
+  onOpenCase,
+}: {
+  escalations: ConsoleEscalation[];
+  cases: RecoverableCase[];
+  onOpenCase: (c: RecoverableCase) => void;
+}) {
+  const [items, setItems] = useState<EscalationToastItem[]>([]);
+  const seen = useRef<Set<string> | null>(null);
 
-  const broken = ai.briefsByClaude === 0;
+  useEffect(() => {
+    if (seen.current === null) {
+      // First observation: the whole backlog counts as already seen.
+      seen.current = new Set(escalations.map((e) => e.id));
+      return;
+    }
+
+    const fresh = escalations.filter((e) => !seen.current!.has(e.id));
+    if (fresh.length === 0) return;
+    for (const e of fresh) seen.current.add(e.id);
+
+    setItems((prev) => [
+      ...prev,
+      ...fresh.map((e) => ({
+        id: e.id,
+        caseId: e.caseId,
+        headline: e.headline,
+        amountPaise: e.amountPaise,
+      })),
+    ]);
+  }, [escalations]);
+
+  const dismiss = useCallback((id: string) => {
+    setItems((prev) => prev.filter((i) => i.id !== id));
+  }, []);
+
+  if (items.length === 0) return null;
+
   return (
-    <span
-      className="card-sub"
-      style={broken ? { color: 'var(--critical)' } : undefined}
-      title={ai.lastError ?? 'Most recent brief was written by Claude'}
-    >
-      {broken
-        ? `AI configured but not writing — ${ai.lastError?.slice(0, 60) ?? 'every brief fell back'}`
-        : `AI on · ${ai.briefsByClaude} written${ai.briefsByFallback > 0 ? `, ${ai.briefsByFallback} fell back` : ''}`}
-    </span>
+    <div className="toast-stack">
+      {items.map((item) => (
+        <EscalationToast
+          key={item.id}
+          item={item}
+          onOpen={() => {
+            const matched = cases.find((c) => c.id === item.caseId);
+            if (matched) onOpenCase(matched);
+            dismiss(item.id);
+          }}
+          dismiss={dismiss}
+        />
+      ))}
+    </div>
+  );
+}
+
+function EscalationToast({
+  item,
+  onOpen,
+  dismiss,
+}: {
+  item: EscalationToastItem;
+  onOpen: () => void;
+  /**
+   * The parent's stable dismisser, not a pre-bound closure — passed down so
+   * the timer effect below can depend on `[item.id, dismiss]`, both of which
+   * stay referentially the same across re-renders. A fresh `() => dismiss(id)`
+   * closure every render would be a new dependency every time, which resets
+   * the timeout on every unrelated re-render this component's parent takes —
+   * e.g. a SECOND toast arriving would restart the FIRST one's countdown,
+   * and it would never time out on its own for as long as new ones kept
+   * showing up.
+   */
+  dismiss: (id: string) => void;
+}) {
+  // "Vanishes after it's been seen" — a fixed few seconds is the honest
+  // reading of that: long enough to register at a glance, gone on its own
+  // rather than waiting to be dismissed by hand every time.
+  useEffect(() => {
+    const id = setTimeout(() => dismiss(item.id), ESCALATION_TOAST_TTL_MS);
+    return () => clearTimeout(id);
+  }, [item.id, dismiss]);
+
+  return (
+    <div className="escalation-toast" role="status">
+      <button type="button" className="escalation-toast-body" onClick={onOpen}>
+        <span className="escalation-toast-title">
+          <span className="dot" style={{ background: 'var(--warning)' }} />
+          Needs a person
+        </span>
+        <span className="escalation-toast-headline">
+          {inr(item.amountPaise)} · {item.headline}
+        </span>
+      </button>
+      <button
+        type="button"
+        className="escalation-toast-dismiss"
+        onClick={() => dismiss(item.id)}
+        aria-label="Dismiss"
+        title="Dismiss"
+      >
+        <CloseIcon />
+      </button>
+    </div>
   );
 }
 

@@ -3718,6 +3718,120 @@ button.trail-case:hover {
   }
 }
 
+/* ─── escalation toast ─────────────────────────────────────────────────────
+ *
+ * A brief, corner-anchored notice for exactly one thing: a case just became
+ * something that needs a person. Not a panel — the backlog of every past
+ * escalation is a click away through the "Needs a person" filter in the
+ * toolbar, and this never tries to be that. It exists only for the instant
+ * one more arrives, and it gets out of the way once it has been seen.
+ */
+
+.toast-stack {
+  position: fixed;
+  right: 22px;
+  bottom: 22px;
+  z-index: 45;
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 8px;
+  /* The gap between stacked toasts is not part of any one of them — clicks
+     there fall through to the page underneath. */
+  pointer-events: none;
+}
+
+.toast-stack > * {
+  pointer-events: auto;
+}
+
+.escalation-toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: min(320px, calc(100vw - 44px));
+  padding: 10px 8px 10px 13px;
+  border-radius: var(--radius);
+  border: 1px solid var(--hairline-strong);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+  animation: toast-in var(--t-base) var(--ease);
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .escalation-toast {
+    animation: none;
+  }
+}
+
+.escalation-toast-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+  border-radius: var(--radius-sm);
+  padding: 2px 4px;
+  margin: -2px -4px;
+  transition: background var(--t-fast) var(--ease);
+}
+
+.escalation-toast-body:hover {
+  background: var(--surface-hover);
+}
+
+.escalation-toast-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 560;
+  color: var(--ink);
+}
+
+.escalation-toast-headline {
+  font-size: 12px;
+  color: var(--ink-secondary);
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.escalation-toast-dismiss {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-sm);
+  color: var(--ink-muted);
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+
+.escalation-toast-dismiss:hover {
+  background: var(--surface-hover);
+  color: var(--ink);
+}
+
+@media (max-width: 640px) {
+  .toast-stack {
+    right: 14px;
+    bottom: 14px;
+  }
+}
+
 /* ─── scrollbars ───────────────────────────────────────────────────────────
  *
  * Every scroll container in this product is *inside* something — a table, a
