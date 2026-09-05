@@ -19,6 +19,7 @@ import { parseEnvelope, type ParsedVapiMessage, type VapiToolCall } from '../../
 import { razorpayForMerchant, channelsForMerchant } from '../../../../workflows/merchant-clients';
 import { cancelPaymentLink, createPaymentLink, fetchPaymentLink } from '../../../../adapters/razorpay/resources';
 import { proposeDiscount } from '../../../../core/guards/discount';
+import { clampDial } from '../../../../core/limits';
 import type { CauseClass } from '../../../../core/taxonomy/cause-class';
 import { formatINR, paise, type Paise } from '../../../../core/money';
 import { compose } from '../../../../messaging/compose';
@@ -353,7 +354,11 @@ async function sendPaymentLinkFollowUpEmail(
       merchantName: input.merchantName,
       phone: null,
       email: input.customerEmail,
-      frequencyCap: input.frequencyCapPerDay,
+      // Clamped like every other dial read — see `core/limits.ts`. In practice
+      // this send is cap-exempt by intent (`call_follow_up`), but the exemption
+      // lives in the send path and this argument must still be a number the
+      // code stands behind rather than whatever the column happens to hold.
+      frequencyCap: clampDial('frequencyCapPerDay', input.frequencyCapPerDay),
       idempotencyKey: `voice:${input.voiceCallId}:email`,
       suppressedReason: null,
       channels,

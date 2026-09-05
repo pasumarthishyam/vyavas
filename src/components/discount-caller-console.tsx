@@ -8,6 +8,57 @@ import type { CallableCase, VoiceCallRow } from '../db/queries/voice-agent';
 
 type WebCallState = 'connecting' | 'active' | 'ended';
 
+/** A call the server refused on the per-case ceiling, offered to a person. */
+interface CallOverride {
+  caseId: string;
+  reason: string;
+  callsPlaced: number;
+}
+
+type AuthorizeVerdict =
+  | { ok: true; requiresOverride: false }
+  | { ok: true; requiresOverride: true; reason: string; callsPlaced: number }
+  | { ok: false; reason: string };
+
+/**
+ * The server's answer to "may this case be called right now".
+ *
+ * A network failure answers **no**. The alternative — assuming yes when the
+ * check itself could not run — makes the ceiling disappear exactly when the
+ * system is least healthy, which is the worst moment to start dialling.
+ */
+async function authorizeCall(caseId: string, override: boolean): Promise<AuthorizeVerdict> {
+  try {
+    const res = await fetch('/api/voice-agent/authorize-call', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ caseId, override }),
+    });
+    const json = (await res.json().catch(() => ({}))) as {
+      ok?: boolean;
+      allowed?: boolean;
+      requiresOverride?: boolean;
+      reason?: string | null;
+      callsPlaced?: number;
+    };
+
+    if (!res.ok || !json.ok) {
+      return { ok: false, reason: json.reason ?? `Could not check the call limit (HTTP ${res.status})` };
+    }
+    if (json.requiresOverride) {
+      return {
+        ok: true,
+        requiresOverride: true,
+        reason: json.reason ?? 'This case has reached its call limit.',
+        callsPlaced: json.callsPlaced ?? 0,
+      };
+    }
+    return { ok: true, requiresOverride: false };
+  } catch {
+    return { ok: false, reason: 'Could not reach the server to check the call limit. Nothing was dialled.' };
+  }
+}
+
 /** Vapi's SDK doesn't publicly document the shape it hands back here — read defensively. */
 function extractCallId(value: unknown): string | null {
   if (value && typeof value === 'object') {
@@ -40,6 +91,8 @@ export function DiscountCallerConsole({
   const [calls, setCalls] = useState(initialCalls);
   const [syncing, setSyncing] = useState(false);
   const [webCall, setWebCall] = useState<{ caseId: string; state: WebCallState } | null>(null);
+  /** Set when the server refused on the call limit and a person may override. */
+  const [confirmCall, setConfirmCall] = useState<CallOverride | null>(null);
   const vapiRef = useRef<InstanceType<typeof Vapi> | null>(null);
 
   const hasPending = calls.some((c) => c.status === 'queued' || c.status === 'ringing' || c.status === 'in_progress');
@@ -79,11 +132,32 @@ export function DiscountCallerConsole({
    * guardrail; the only thing that's different from a real phone call is the
    * transport, and the webhook doesn't know or care which one it was.
    */
-  async function startWebCall(caseId: string) {
+  async function startWebCall(caseId: string, override = false) {
     const publicKey = process.env.NEXT_PUBLIC_VAPI_PUBLIC_KEY;
     const assistantId = process.env.NEXT_PUBLIC_VAPI_ASSISTANT_ID;
     if (!publicKey || !assistantId) {
       setNotice('Web call is not configured — set NEXT_PUBLIC_VAPI_PUBLIC_KEY and NEXT_PUBLIC_VAPI_ASSISTANT_ID.');
+      return;
+    }
+
+    /*
+     * Ask the server first, every time.
+     *
+     * A web call starts in the browser, so the only moment a limit can be
+     * enforced is before `vapi.start()` — afterwards the phone has already
+     * rung. And the answer has to come from the server rather than from the
+     * `callCount` on this page: that number is from whenever the list last
+     * rendered, and two people on two screens would each see "1 call" and each
+     * place a second one.
+     */
+    const verdict = await authorizeCall(caseId, override);
+    if (!verdict.ok) {
+      setNotice(verdict.reason);
+      return;
+    }
+    if (verdict.requiresOverride) {
+      // Not an error and not a refusal — a decision that belongs to a person.
+      setConfirmCall({ caseId, reason: verdict.reason, callsPlaced: verdict.callsPlaced });
       return;
     }
 
@@ -101,7 +175,9 @@ export function DiscountCallerConsole({
         await fetch('/api/voice-agent/web-calls', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ caseId, vapiCallId }),
+          // Carried through so the case timeline records this call as a human
+          // decision rather than as one the agent made on its own.
+          body: JSON.stringify({ caseId, vapiCallId, override }),
         });
         await refreshCalls();
       } catch {
@@ -154,6 +230,19 @@ export function DiscountCallerConsole({
 
   return (
     <>
+      {confirmCall && (
+        <ConfirmOverCallLimit
+          confirm={confirmCall}
+          onCancel={() => setConfirmCall(null)}
+          onConfirm={() => {
+            const { caseId } = confirmCall;
+            setConfirmCall(null);
+            // Second pass, this time carrying the override the person just gave.
+            void startWebCall(caseId, true);
+          }}
+        />
+      )}
+
       {webCall && (
         <div
           className="notice"
@@ -248,12 +337,21 @@ export function DiscountCallerConsole({
                       ) : (
                         <button
                           type="button"
-                          className="btn-primary btn-sm"
+                          /* At the ceiling the button stays live but stops
+                             looking like the default action — it opens a
+                             confirmation rather than dialling. Hiding it would
+                             just move the call to someone's own phone, where
+                             nothing records it. */
+                          className={c.needsCallOverride ? 'btn-ghost btn-sm' : 'btn-primary btn-sm'}
                           disabled={webCall !== null}
                           onClick={() => void startWebCall(c.id)}
-                          title="Talk to the agent through your browser's microphone — no phone, no carrier involved."
+                          title={
+                            c.needsCallOverride
+                              ? `Called ${c.callCount} time${c.callCount === 1 ? '' : 's'} already — this asks you to confirm first.`
+                              : "Talk to the agent through your browser's microphone — no phone, no carrier involved."
+                          }
                         >
-                          Web call
+                          {c.needsCallOverride ? `Call again · ${c.callCount}` : 'Web call'}
                         </button>
                       )}
                     </td>
@@ -347,5 +445,54 @@ function StatusCell({ status, endedReason }: { status: string; endedReason: stri
       {status.replace(/_/g, ' ')}
       {isFailure && endedReason ? <span className="cell-sub"> · {endedReason}</span> : null}
     </span>
+  );
+}
+
+/**
+ * The third call, with what it is stated before it happens.
+ *
+ * Same shape as the recovery console's resend confirmation, and for the same
+ * reason: a refusal a person cannot pass is a refusal they route around — they
+ * will pick up their own phone, and nothing will record that they did. This
+ * keeps the decision, the person and the record in one place.
+ */
+function ConfirmOverCallLimit({
+  confirm,
+  onCancel,
+  onConfirm,
+}: {
+  confirm: CallOverride;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onCancel();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onCancel]);
+
+  return (
+    <div className="overlay" role="dialog" aria-modal="true" aria-labelledby="call-limit-title">
+      <div className="overlay-backdrop" onClick={onCancel} />
+      <div className="overlay-card">
+        <h2 id="call-limit-title">Call this customer again?</h2>
+        <p>{confirm.reason}</p>
+        <p>
+          Placing this call is <strong>your decision</strong>, not the agent&rsquo;s. It is written
+          to the case timeline as a manual override, with the count it passed.
+        </p>
+
+        <div className="overlay-actions">
+          <button type="button" className="btn-ghost" onClick={onCancel}>
+            Cancel
+          </button>
+          <button type="button" className="btn-primary" onClick={onConfirm}>
+            Call anyway
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }

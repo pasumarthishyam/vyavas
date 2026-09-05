@@ -33,10 +33,19 @@ export const DISCOUNT_TIERS_PAISE: readonly Paise[] = [paise(20_000), paise(50_0
 export const DISCOUNT_MAX_PAISE: Paise = paise(50_000);
 
 /**
- * Never discount away more than half the order. Stops a small order plus the
- * ₹500 ceiling from putting the payable amount at, or below, zero.
+ * Never discount away more than 30% of the order.
+ *
+ * Was 50%, which was set to stop a small order plus the ₹500 ceiling putting
+ * the payable amount at or below zero — a correctness floor rather than a
+ * commercial judgement. 30% is the commercial judgement: on a ₹1,000 order tier
+ * 2 is now capped to ₹300 rather than ₹500, and the margin the recovery is
+ * meant to protect survives the recovery.
+ *
+ * The same fraction applies in `cart-discount.ts`. Two guards, one number, on
+ * purpose — an operator should not have to remember which agent discounts
+ * harder.
  */
-const MAX_DISCOUNT_FRACTION = 0.5;
+const MAX_DISCOUNT_FRACTION = 0.3;
 
 /**
  * Classes where a discount is never the right move — never incentivize a

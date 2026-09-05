@@ -428,15 +428,56 @@ describe('the live-customer window', () => {
     expect(r.failed).toBe('not_quiet_hours');
   });
 
-  it('defers a first touch that arrives long after the failure', () => {
-    // Past the window the person has put the phone down. This is what stops
-    // the exemption becoming a licence to message at 3am.
+  it('lets a first touch long after the failure through on EMAIL only', () => {
+    /*
+     * Past the live-customer window the person has put the phone down, so the
+     * WhatsApp exemption is over — but a payment that failed at 01:30 used to
+     * produce nothing at all until 08:00, by which time the intent is gone.
+     *
+     * Email is the resolution: it waits in an inbox rather than lighting up a
+     * phone, so the harm quiet hours exist to prevent does not apply to it.
+     */
     const r = evaluatePreconditions(
       ALL,
       facts({ ...atNight, isFirstTouch: true, minutesSinceFailure: 90, liveCustomerWindowMinutes: 15 }),
     );
+    expect(r.disposition).toBe('proceed');
+    expect(r.restrictToChannels).toEqual(['email']);
+  });
+
+  it('still defers overnight when the customer has no email', () => {
+    // The exemption is a channel decision, not an hour decision. With nothing
+    // safe to send on, the rung waits for morning exactly as it always did.
+    const r = evaluatePreconditions(
+      ALL,
+      facts({
+        ...atNight,
+        isFirstTouch: true,
+        minutesSinceFailure: 90,
+        eligibleChannels: ['whatsapp'],
+      }),
+    );
     expect(r.disposition).toBe('defer');
     expect(r.failed).toBe('not_quiet_hours');
+  });
+
+  it('does NOT extend the overnight exemption to a follow-up', () => {
+    // The narrowing that keeps this from becoming "email whenever we like".
+    // A second touch is a campaign, and a campaign waits for morning.
+    const r = evaluatePreconditions(
+      ALL,
+      facts({ ...atNight, isFirstTouch: false, minutesSinceFailure: 90 }),
+    );
+    expect(r.disposition).toBe('defer');
+    expect(r.failed).toBe('not_quiet_hours');
+  });
+
+  it('narrows nothing outside quiet hours', () => {
+    // The restriction must be scoped to the branch that needs it — a daytime
+    // rung keeps every channel the policy asked for.
+    const r = evaluatePreconditions(ALL, facts({ isFirstTouch: true, minutesSinceFailure: 90 }));
+    expect(r.disposition).toBe('proceed');
+    expect(r.restrictToChannels).toBeNull();
   });
 
   it('does not exempt anything else', () => {

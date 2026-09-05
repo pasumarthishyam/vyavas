@@ -19,6 +19,7 @@ import { merchantAlerts } from '../schema/ops.js';
 import { escalations } from '../schema/queues.js';
 import { redactShort } from '../../lib/redact.js';
 import type { CaseState } from '../../core/case/types.js';
+import { DIAL_BOUNDS, clampDial } from '../../core/limits.js';
 
 const LIVE: CaseState[] = ['detected', 'diagnosed', 'executing', 'paused'];
 
@@ -89,6 +90,25 @@ export interface RecoverableCase {
 
   lastStep: CaseStep | null;
   nextAction: PlannedStep | null;
+
+  /*
+   * ── what this customer has already had, across every case ──
+   *
+   * The 24h frequency cap is per PERSON, not per case, which is correct and
+   * invisible: an operator looking at case B has no way to know that case A
+   * used the last slot this morning, so a case sitting there doing nothing
+   * looks broken rather than capped. These two fields are that missing context.
+   */
+
+  /** Real (unsuppressed) messages this customer has had in the rolling 24h, all cases. */
+  touchesLast24h: number;
+  /**
+   * When the next slot frees, or null when they are not at the cap.
+   *
+   * 24h after the OLDEST message still in the window — the same instant the
+   * gate computes when it defers, so the console and the ladder always agree.
+   */
+  capClearsAt: Date | null;
 }
 
 export async function getRecoverableCases(
@@ -104,10 +124,17 @@ export async function getRecoverableCases(
     .limit(50);
 
   const ids = rows.map((r) => r.c.id);
-  const [steps, nextActions] = await Promise.all([
+  const customerIds = [...new Set(rows.map((r) => r.c.customerId).filter((x): x is string => x !== null))];
+
+  const [steps, nextActions, touches, merchant] = await Promise.all([
     getLatestStepsByCase(db, ids),
     getNextPlannedByCase(db, ids),
+    getRecentTouchesByCustomer(db, customerIds),
+    getConsoleMerchant(db, merchantId),
   ]);
+
+  // The effective cap, already clamped by `getConsoleMerchant`.
+  const cap = merchant?.frequencyCapPerDay ?? DIAL_BOUNDS.frequencyCapPerDay.fallback;
 
   return rows.map(({ c, cust }) => ({
     id: c.id,
@@ -130,7 +157,70 @@ export async function getRecoverableCases(
     optedOut: cust?.optedOutAt != null,
     lastStep: steps.get(c.id) ?? null,
     nextAction: nextActions.get(c.id) ?? null,
+    touchesLast24h: c.customerId ? (touches.get(c.customerId)?.count ?? 0) : 0,
+    capClearsAt: capClearsAt(c.customerId ? (touches.get(c.customerId) ?? null) : null, cap),
   }));
+}
+
+interface TouchWindow {
+  count: number;
+  /** The oldest message still inside the rolling 24h window. */
+  oldestAt: Date | null;
+}
+
+/**
+ * How much of the 24h budget each of these customers has spent.
+ *
+ * One grouped query for the whole page rather than one per case — the console
+ * polls this route every few seconds, and a per-case query would multiply that
+ * by the number of open cases.
+ *
+ * Mirrors the gate's own count exactly: unsuppressed rows only (a holdout
+ * record never consumed anything), every case, rolling 24h.
+ */
+async function getRecentTouchesByCustomer(
+  db: Database,
+  customerIds: string[],
+): Promise<Map<string, TouchWindow>> {
+  if (customerIds.length === 0) return new Map();
+
+  const rows = await db
+    .select({
+      customerId: messageLog.customerId,
+      n: sql<number>`count(*)::int`,
+      oldest: sql<Date | null>`min(${messageLog.sentAt})`,
+    })
+    .from(messageLog)
+    .where(
+      and(
+        inArray(messageLog.customerId, customerIds),
+        isNull(messageLog.suppressedReason),
+        sql`${messageLog.sentAt} > now() - interval '24 hours'`,
+      ),
+    )
+    .groupBy(messageLog.customerId);
+
+  const out = new Map<string, TouchWindow>();
+  for (const r of rows) {
+    if (!r.customerId) continue;
+    out.set(r.customerId, {
+      count: Number(r.n ?? 0),
+      oldestAt: r.oldest ? new Date(r.oldest) : null,
+    });
+  }
+  return out;
+}
+
+/**
+ * When this customer can next be messaged, or null if they can be right now.
+ *
+ * The same arithmetic the gate uses to schedule a deferred rung, deliberately:
+ * if this said one thing and the ladder did another, the number on screen would
+ * be worse than no number at all.
+ */
+function capClearsAt(window: TouchWindow | null, cap: number): Date | null {
+  if (!window || window.count < cap || !window.oldestAt) return null;
+  return new Date(window.oldestAt.getTime() + 24 * 60 * 60 * 1000);
 }
 
 /**
@@ -853,7 +943,11 @@ export async function getConsoleMerchant(
     id: m.id,
     name: m.name,
     executionEnabled: m.executionEnabled,
-    frequencyCapPerDay: m.frequencyCapPerDay,
+    // The cap the gate will ACTUALLY apply, not the stored column. A value
+    // outside the permitted range is clamped on read (see `core/limits.ts`),
+    // and a console showing 1000 while the gate enforces 10 is a console that
+    // cannot be used to reason about why a message did not go out.
+    frequencyCapPerDay: clampDial('frequencyCapPerDay', m.frequencyCapPerDay),
     quietHoursStart: m.quietHoursStart,
     quietHoursEnd: m.quietHoursEnd,
     timezone: m.timezone,
@@ -905,7 +999,11 @@ export async function getConsoleMerchantBySlug(
     id: m.id,
     name: m.name,
     executionEnabled: m.executionEnabled,
-    frequencyCapPerDay: m.frequencyCapPerDay,
+    // The cap the gate will ACTUALLY apply, not the stored column. A value
+    // outside the permitted range is clamped on read (see `core/limits.ts`),
+    // and a console showing 1000 while the gate enforces 10 is a console that
+    // cannot be used to reason about why a message did not go out.
+    frequencyCapPerDay: clampDial('frequencyCapPerDay', m.frequencyCapPerDay),
     quietHoursStart: m.quietHoursStart,
     quietHoursEnd: m.quietHoursEnd,
     timezone: m.timezone,

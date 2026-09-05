@@ -74,8 +74,8 @@ describe('proposeDiscount', () => {
     expect(d.approved).toBe(false);
   });
 
-  it('caps the discount at half the order amount on a small order', () => {
-    const smallOrder = paise(30_000); // ₹300 — half of it is ₹150, below tier 1's ₹200
+  it('caps the discount at 30% of the order amount on a small order', () => {
+    const smallOrder = paise(30_000); // ₹300 — 30% of it is ₹90, below tier 1's ₹200
     const d = proposeDiscount({
       orderAmountPaise: smallOrder,
       requestedTier: 1,
@@ -83,7 +83,21 @@ describe('proposeDiscount', () => {
       causeClass: null,
     });
     expect(d.approved).toBe(true);
-    if (d.approved) expect(d.amountPaise).toBe(paise(15_000));
+    if (d.approved) expect(d.amountPaise).toBe(paise(9_000));
+  });
+
+  it('caps tier 2 at 30% rather than at its own ₹500', () => {
+    // ₹1,000: tier 2 asks for ₹500, the fraction allows ₹300. The tighter of
+    // the two wins — that is the whole job of the fraction, and the case that
+    // changed when it moved from half to 30%.
+    const d = proposeDiscount({
+      orderAmountPaise: paise(100_000),
+      requestedTier: 2,
+      alreadyOfferedTier: 1,
+      causeClass: null,
+    });
+    expect(d.approved).toBe(true);
+    if (d.approved) expect(d.amountPaise).toBe(paise(30_000));
   });
 
   it('refuses ineligible cause classes', () => {

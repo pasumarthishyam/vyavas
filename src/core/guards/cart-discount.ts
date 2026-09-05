@@ -4,8 +4,8 @@
  * Much smaller than `discount.ts` because there is nothing to negotiate — no
  * call, no model, no tiers. A cart is abandoned, the flat discount applies, and
  * the only judgement left is the same one `discount.ts` already makes: never
- * discount away more than half the order, so a very small cart cannot be
- * pushed to (or below) zero.
+ * discount away more than 30% of the cart, so a small cart keeps its margin and
+ * cannot be pushed to (or below) zero.
  *
  * Pure. No DB, no network — the webhook handler calls this and nothing else
  * decides the number.
@@ -17,7 +17,8 @@ import { paise } from '../money.js';
 /** Flat ₹200 off. There is only one tier here — nothing to escalate to. */
 export const CART_DISCOUNT_PAISE: Paise = paise(20_000);
 
-const MAX_DISCOUNT_FRACTION = 0.5;
+/** 30% — the same ceiling `discount.ts` applies, for the same reason. */
+const MAX_DISCOUNT_FRACTION = 0.3;
 
 export interface CartDiscountDecision {
   readonly amountPaise: Paise;

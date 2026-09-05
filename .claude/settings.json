@@ -108,7 +108,8 @@
       "Bash(awk 'NR>=1516 && /^}$/ {print NR; exit}' src/components/recovery-console.tsx)",
       "Bash(awk 'NR>=1671 && /^}$/ {print \"second fragment ends at line\", NR; exit}' src/components/recovery-console.tsx)",
       "Bash(grep -vE \"^\\\\s*\\\\*|^\\\\s*/\\\\*|^\\\\s*$\" src/db/schema/tenancy.ts)",
-      "Bash(cd \"c:/Users/Hp/Documents/Vyavas_AIrecovery\" && grep -nE \"arg\\\\\\('|--[a-z-]+\" scripts/merchant.ts | grep -oE \"\\\\-\\\\-[a-z-]+\" | sort -u | head -30; echo \"=== usage block ===\"; sed -n '/Usage:/,/^`/p' scripts/merchant.ts | head -25)"
+      "Bash(cd \"c:/Users/Hp/Documents/Vyavas_AIrecovery\" && grep -nE \"arg\\\\\\('|--[a-z-]+\" scripts/merchant.ts | grep -oE \"\\\\-\\\\-[a-z-]+\" | sort -u | head -30; echo \"=== usage block ===\"; sed -n '/Usage:/,/^`/p' scripts/merchant.ts | head -25)",
+      "Bash(grep -vE \"^\\\\s*\\\\*|^\\\\s*/\\\\*|^\\\\s*$|^\\\\s*//\" src/db/schema/voice.ts)"
     ],
     "additionalDirectories": [
       "C:\\Users\\Hp\\Documents\\Vyavas_AIrecovery\\scripts"

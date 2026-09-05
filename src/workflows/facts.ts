@@ -18,6 +18,7 @@ import type { Channel } from '../core/actions/types.js';
 import type { CauseClass } from '../core/taxonomy/cause-class.js';
 import type { PreconditionFacts } from '../core/guards/preconditions.js';
 import { DEFAULT_QUIET_HOURS } from '../core/guards/quiet-hours.js';
+import { effectiveDials } from '../core/limits.js';
 
 import type { Database } from '../db/client.js';
 import { customers } from '../db/schema/customers.js';
@@ -263,7 +264,19 @@ export async function gatherFacts(opts: GatherOptions): Promise<GatheredFacts | 
     }
   }
 
-  // ── today's budget ──
+  /*
+   * ── today's budget ──
+   *
+   * "Today" in the MERCHANT's timezone, not the database server's.
+   *
+   * This read `date_trunc('day', now())`, which is UTC, so an Indian merchant's
+   * daily budget reset at 05:30 IST. Everything else in this file is careful
+   * about the merchant's local time — quiet hours are computed in their zone —
+   * and a budget that resets in the middle of the night while the quiet-hours
+   * window is still open is the one boundary nobody would ever notice being
+   * wrong, right up until a merchant asks why they burned two days of budget on
+   * one morning.
+   */
   const [sentToday] = await db
     .select({ n: count() })
     .from(messageLog)
@@ -271,9 +284,18 @@ export async function gatherFacts(opts: GatherOptions): Promise<GatheredFacts | 
       and(
         eq(messageLog.merchantId, c.merchantId),
         isNull(messageLog.suppressedReason),
-        gt(messageLog.sentAt, sql`date_trunc('day', now())`),
+        gt(
+          messageLog.sentAt,
+          sql`date_trunc('day', now() at time zone ${m.timezone}) at time zone ${m.timezone}`,
+        ),
       ),
     );
+
+  // Every dial the gate is about to read, clamped into the range the code
+  // permits. A stored value outside it (the frequency cap sat at 1000 through
+  // testing) is brought back to the edge here rather than trusted — see
+  // `core/limits.ts` for why this is a read-time guard and not a write-time one.
+  const dials = effectiveDials(m);
 
   const facts: PreconditionFacts = {
     now,
@@ -283,19 +305,19 @@ export async function gatherFacts(opts: GatherOptions): Promise<GatheredFacts | 
     customerOptedOut: cust?.optedOutAt != null,
     eligibleChannels,
     lastAttemptAt,
-    liveAttemptWindowMinutes: m.liveAttemptLockMinutes,
+    liveAttemptWindowMinutes: dials.liveAttemptLockMinutes,
     recentMessageCount,
-    frequencyCap: m.frequencyCapPerDay,
+    frequencyCap: dials.frequencyCapPerDay,
     oldestMessageInWindowAt,
     minutesSinceLastTouch,
-    minGapMinutes: m.minGapMinutes,
+    minGapMinutes: dials.minGapMinutes,
     // Nobody has heard from us about this case yet.
     isFirstTouch: Number(touchesOnCase?.n ?? 0) === 0,
     minutesSinceFailure: Math.floor((now.getTime() - c.createdAt.getTime()) / 60_000),
-    liveCustomerWindowMinutes: m.liveCustomerWindowMinutes,
+    liveCustomerWindowMinutes: dials.liveCustomerWindowMinutes,
     timeZone: m.timezone,
     quietHours: { start: m.quietHoursStart, end: m.quietHoursEnd },
-    merchantBudgetRemaining: m.dailyMessageBudget - Number(sentToday?.n ?? 0),
+    merchantBudgetRemaining: dials.dailyMessageBudget - Number(sentToday?.n ?? 0),
     mandateActive: c.attended ? null : c.mandateId != null,
     executionEnabled: m.executionEnabled,
   };

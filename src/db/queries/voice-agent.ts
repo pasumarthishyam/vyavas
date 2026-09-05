@@ -15,6 +15,7 @@ import { voiceCalls } from '../schema/voice.js';
 import { paiseFromColumn } from '../util.js';
 import type { CaseState } from '../../core/case/types.js';
 import { RESUME_MAX_AGE_DAYS } from '../../core/guards/resume.js';
+import { MAX_CALLS_PER_CASE } from '../../core/guards/call-limit.js';
 
 const num = paiseFromColumn;
 const LIVE_STATES: CaseState[] = ['detected', 'diagnosed', 'executing', 'paused'];
@@ -39,6 +40,16 @@ export interface CallableCase {
    * so the answer is the same one `/api/voice-agent/calls` enforces server-side.
    */
   blockedReason: string | null;
+  /**
+   * At or past the per-case call ceiling.
+   *
+   * Deliberately NOT folded into `blockedReason`. Those are hard stops — a
+   * paused account, a failure too old to speak about — and this one is a
+   * boundary a person is allowed to cross with their eyes open. Collapsing the
+   * two would either forbid the override or turn every hard stop into a
+   * suggestion. See `core/guards/call-limit.ts`.
+   */
+  needsCallOverride: boolean;
 }
 
 /**
@@ -97,6 +108,7 @@ export async function getCallableCases(db: Database, merchantId: string, limit =
           : ageDays > RESUME_MAX_AGE_DAYS
             ? `the payment failed ${ageDays} days ago`
             : null,
+      needsCallOverride: Number(r.callCount ?? 0) >= MAX_CALLS_PER_CASE,
     };
   });
 }

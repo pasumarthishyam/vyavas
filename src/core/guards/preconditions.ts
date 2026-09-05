@@ -150,6 +150,17 @@ export interface GateResult {
   readonly reason: string;
   /** Set when deferring: the earliest instant worth trying again. */
   readonly retryAt: Date | null;
+  /**
+   * Channels this rung may use, narrower than the ones the customer is
+   * reachable on.
+   *
+   * Null means "no narrowing" and is the normal case. It is set only by the
+   * quiet-hours branch, which permits a first touch overnight on email alone —
+   * see the note there. The executor intersects it with the rung's own channel
+   * list; if nothing survives, the rung defers rather than sending on a channel
+   * the gate just excluded.
+   */
+  readonly restrictToChannels: readonly Channel[] | null;
 }
 
 const proceed: GateResult = {
@@ -157,6 +168,7 @@ const proceed: GateResult = {
   failed: null,
   reason: 'all preconditions met',
   retryAt: null,
+  restrictToChannels: null,
 };
 
 const abort = (failed: GateResult['failed'], reason: string): GateResult => ({
@@ -164,6 +176,7 @@ const abort = (failed: GateResult['failed'], reason: string): GateResult => ({
   failed,
   reason,
   retryAt: null,
+  restrictToChannels: null,
 });
 
 const defer = (failed: GateResult['failed'], reason: string, retryAt: Date): GateResult => ({
@@ -171,6 +184,7 @@ const defer = (failed: GateResult['failed'], reason: string, retryAt: Date): Gat
   failed,
   reason,
   retryAt,
+  restrictToChannels: null,
 });
 
 /** No `retryAt`: a pause ends when a person ends it, not at a time we can name. */
@@ -179,7 +193,27 @@ const paused: GateResult = {
   failed: 'execution_paused',
   reason: 'the merchant has paused this agent',
   retryAt: null,
+  restrictToChannels: null,
 };
+
+/** Proceed, but only on these channels. See `GateResult.restrictToChannels`. */
+const proceedOn = (channels: readonly Channel[], reason: string): GateResult => ({
+  disposition: 'proceed',
+  failed: null,
+  reason,
+  retryAt: null,
+  restrictToChannels: channels,
+});
+
+/**
+ * The channel that is safe to use at any hour.
+ *
+ * Email, and only email. The distinction is physical, not editorial: a WhatsApp
+ * template lights up a phone on a bedside table, and an email waits in an inbox
+ * until someone chooses to look. That is the entire basis on which the overnight
+ * exemption below is defensible.
+ */
+const QUIET_HOURS_CHANNEL: Channel = 'email';
 
 const MINUTE = 60_000;
 const HOUR = 3_600_000;
@@ -338,6 +372,37 @@ export function evaluatePreconditions(
     if (!customerIsLive) {
       const allowed = nextAllowedTime(facts.now, facts.timeZone, facts.quietHours);
       if (allowed.getTime() > facts.now.getTime()) {
+        /*
+         * ── the overnight first touch ──
+         *
+         * A payment that fails at 01:30 used to produce nothing at all until
+         * 08:00 for every class whose first rung is more than
+         * `liveCustomerWindowMinutes` out — which is most of them. By morning
+         * the intent is gone, and the first thing we ever say about a failure
+         * arrives six hours late.
+         *
+         * The live-customer exemption above does not help: it is scoped to a
+         * few minutes after the failure precisely so it cannot become a licence
+         * to ring a phone at 3am. That scoping is right for WhatsApp and
+         * pointless for email, because the harm it guards against — waking
+         * someone — is a property of the channel, not of the hour.
+         *
+         * So the FIRST touch on a case is allowed overnight on email alone. It
+         * sits in an inbox until they look. Every later rung obeys quiet hours
+         * exactly as before: a follow-up is a campaign, and a campaign waits
+         * for morning.
+         *
+         * Deliberately gated on `isFirstTouch`, not on "no message today". A
+         * case that has already been spoken to has nothing time-critical left
+         * to say.
+         */
+        if (facts.isFirstTouch && facts.eligibleChannels.includes(QUIET_HOURS_CHANNEL)) {
+          return proceedOn(
+            [QUIET_HOURS_CHANNEL],
+            'inside quiet hours — first touch permitted on email only',
+          );
+        }
+
         return defer('not_quiet_hours', 'inside the merchant quiet-hours window', allowed);
       }
     }

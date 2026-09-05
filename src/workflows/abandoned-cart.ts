@@ -15,6 +15,7 @@ import { recordCartLinkIssued, type CartEmailStatus } from '../db/repos/abandone
 import { razorpayForMerchant, channelsForMerchant } from './merchant-clients.js';
 import { createPaymentLink } from '../adapters/razorpay/resources.js';
 import { proposeCartDiscount } from '../core/guards/cart-discount.js';
+import { clampDial } from '../core/limits.js';
 import { formatINR, paise, subPaise, type Paise } from '../core/money.js';
 import { compose } from '../messaging/compose.js';
 import { sendMessage, type SendOutcome } from '../messaging/send.js';
@@ -152,7 +153,11 @@ export async function processAbandonedCart(db: Database, input: ProcessCartInput
       merchantName: input.merchantName,
       phone: null,
       email: input.customerEmail,
-      frequencyCap: input.frequencyCapPerDay,
+      // Clamped, like every other read of a merchant dial. This agent shares
+      // one 24h budget with the ladder, so it has to share the same bound too —
+      // otherwise an out-of-range cap loosens the ladder nowhere and everything
+      // here. See `core/limits.ts`.
+      frequencyCap: clampDial('frequencyCapPerDay', input.frequencyCapPerDay),
       idempotencyKey: `abandoned-cart:${input.cartRowId}:email`,
       // Never suppressed: the caller does not reach this function at all while
       // the merchant is paused, so by here the send is meant to happen.

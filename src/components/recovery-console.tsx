@@ -779,6 +779,25 @@ const DECISION_COPY: Record<string, { verb: string; tone: 'progress' | 'done' | 
   payment_link_created: { verb: 'Payment link created', tone: 'progress' },
   recovery_started: { verb: 'Recovery started', tone: 'progress' },
   state_changed: { verb: 'State changed', tone: 'muted' },
+  voice_call_placed: { verb: 'Call placed', tone: 'progress' },
+};
+
+/**
+ * Reasons that deserve their own words rather than their event's.
+ *
+ * `ladder_complete` is the one that mattered. It covered a case that had said
+ * everything its class permits AND one that never managed to send anything, and
+ * both rendered as the same grey "Ladder complete" — so a merchant asking "why
+ * has this stopped?" got the same four words either way. The ladder now records
+ * which of the two it was, so this can finally say it: **Ceiling reached** is
+ * the agent finishing by design, and any further contact is a person's call.
+ */
+const STEP_REASON_COPY: Record<string, { verb: string; tone: 'progress' | 'done' | 'failed' | 'muted' }> = {
+  ceiling_reached: { verb: 'Ceiling reached', tone: 'done' },
+  ladder_exhausted: { verb: 'Ladder complete — nothing left to send', tone: 'muted' },
+  deferral_limit: { verb: 'Gave up waiting', tone: 'failed' },
+  deferred_past_deadline: { verb: 'Ran out of time', tone: 'failed' },
+  call_limit_override: { verb: 'Call placed by hand', tone: 'progress' },
 };
 
 interface StepLine {
@@ -826,6 +845,11 @@ function stepLine(step: CaseStep): StepLine {
         return { text: `${channel} ${step.status ?? ''}`.trim(), detail, tone: 'muted' };
     }
   }
+
+  // The reason wins where it has its own words: "Ceiling reached" says
+  // something "Ladder complete" cannot, and it is the same row.
+  const byReason = step.reason ? STEP_REASON_COPY[step.reason] : undefined;
+  if (byReason) return { text: byReason.verb, detail: null, tone: byReason.tone };
 
   const known = DECISION_COPY[step.event ?? ''];
   const verb = known?.verb ?? (step.event ?? 'Update').replace(/_/g, ' ');
@@ -952,7 +976,18 @@ function CaseRow({
       </td>
 
       <td>
-        {c.nextAction ? (
+        {/*
+          The cap outranks the last step in this column.
+
+          It is the only state where the honest answer to "what is happening
+          with this case" is about a DIFFERENT case: the customer used their
+          messages elsewhere, and this one is waiting on a clock nothing on this
+          row could otherwise explain. Showing the previous step instead made a
+          capped case look idle.
+        */}
+        {c.capClearsAt ? (
+          <CappedBadge clearsAt={new Date(c.capClearsAt)} touches={c.touchesLast24h} />
+        ) : c.nextAction ? (
           <NextActionBadge next={c.nextAction} />
         ) : c.lastStep ? (
           <StepBadge step={stepLine(c.lastStep)} at={new Date(c.lastStep.at)} />
@@ -1005,6 +1040,38 @@ function formatCountdown(ms: number): string {
   const h = Math.ceil(m / 60);
   if (h < 48) return `${h}h`;
   return `${Math.ceil(h / 24)}d`;
+}
+
+/**
+ * This customer has had all the messages they may have today.
+ *
+ * The cap is per PERSON and this case may be nowhere near it on its own — the
+ * budget was spent on another case, in another workflow, possibly by another
+ * agent. That is exactly why it has to be said here: without it, an operator
+ * sees a live case doing nothing, checks its history, finds nothing wrong, and
+ * concludes the system is broken.
+ *
+ * Naming the instant rather than "capped" alone is the point. It answers the
+ * only question that follows — *when can we talk to them?* — and it is the same
+ * instant the gate itself will wake on.
+ */
+function CappedBadge({ clearsAt, touches }: { clearsAt: Date; touches: number }) {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => tick((n) => n + 1), 30_000);
+    return () => clearInterval(id);
+  }, []);
+
+  return (
+    <div
+      className="cell-main step-line"
+      title={`${touches} message(s) to this customer in the last 24 hours, across every case. The cap is per person, not per case.`}
+    >
+      <span className="dot" style={{ background: 'var(--warning)' }} />
+      Capped
+      <span className="cell-sub"> · next {whenLabel(clearsAt)}</span>
+    </div>
+  );
 }
 
 /** The row's compact read of `c.nextAction` — live, ticking every second. */
@@ -1188,6 +1255,21 @@ function CaseDrawer({
               {blocked ? (c.optedOut ? 'opted out' : 'unreachable') : 'reachable'}
             </span>
             {c.messagesSent > 0 && <span className="pill">{c.messagesSent} sent</span>}
+            {/* The per-person budget, stated on the case rather than left to be
+                inferred. `messagesSent` above is this case's own count; this is
+                the one the gate actually checks, and the two differ whenever
+                the customer has more than one case open. */}
+            <span
+              className="pill"
+              title="Real messages to this customer in the last 24 hours, across every case and every agent."
+            >
+              <span
+                className="dot"
+                style={{ background: c.capClearsAt ? 'var(--warning)' : 'var(--ink-muted)' }}
+              />
+              {c.touchesLast24h} in 24h
+              {c.capClearsAt ? ` · next ${whenLabel(new Date(c.capClearsAt))}` : ''}
+            </span>
             <span className="cell-sub">{c.emailMasked ?? c.phoneMasked ?? '—'}</span>
           </div>
         </div>

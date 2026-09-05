@@ -27,6 +27,7 @@ import { type Action, type Channel, idempotencyKey } from '../core/actions/types
 import { effectiveRails } from '../core/policy/resolve.js';
 import { evaluatePreconditions, selectChannel } from '../core/guards/preconditions.js';
 import type { GateResult } from '../core/guards/preconditions.js';
+import { nextAllowedTime } from '../core/guards/quiet-hours.js';
 import type { LadderRung, PolicyRow } from '../core/policy/schema.js';
 import type { Diagnosis } from '../core/taxonomy/diagnose.js';
 import type { AlternateRail } from '../core/case/types.js';
@@ -163,9 +164,61 @@ export async function executeRung(input: ExecuteRungInput): Promise<RungOutcome>
     };
   }
 
+  /*
+   * The channels this rung may actually use.
+   *
+   * Normally every channel the customer is reachable on. The gate narrows it
+   * when a rung is permitted only under a condition attached to a channel —
+   * today that is the overnight first touch, which proceeds on email alone
+   * rather than deferring to morning. Applied here rather than inside
+   * `buildAction` so a fanout rung is narrowed too: the whole point of fanout
+   * is that both halves go out inside ONE gate decision, so both halves have to
+   * respect that decision.
+   */
+  const eligibleChannels = gate.restrictToChannels
+    ? gathered.facts.eligibleChannels.filter((c) => gate.restrictToChannels!.includes(c))
+    : gathered.facts.eligibleChannels;
+
   // ── build the typed action ──
-  const built = buildAction(input);
+  const built = buildAction(input, eligibleChannels);
   if (!built) {
+    /*
+     * A rung the gate allowed but whose channels it excluded is DEFERRED, not
+     * skipped. The distinction matters: skipping walks away from the touch, and
+     * the reason it could not send here is temporary — a WhatsApp-only rung
+     * inside quiet hours is sendable at 08:00. Skipping it would mean a class
+     * whose first rung is WhatsApp-only silently loses its first touch on every
+     * overnight failure, which is the bug this whole branch exists to fix.
+     */
+    if (gate.restrictToChannels) {
+      const retryAt = nextAllowedTime(
+        gathered.facts.now,
+        gathered.facts.timeZone,
+        gathered.facts.quietHours,
+      );
+      await appendEvent(db, {
+        caseId,
+        merchantId,
+        kind: 'rung_deferred',
+        reason: 'not_quiet_hours',
+        actor: 'workflow',
+        payload: {
+          rung: rungIndex,
+          reason: `${rung.action} has no channel permitted overnight`,
+          retryAt: retryAt.toISOString(),
+        },
+      });
+      return {
+        disposition: 'deferred',
+        gate,
+        suppressedReason: null,
+        action: null,
+        channel: null,
+        retryAt,
+        note: 'no channel permitted inside quiet hours — waiting for morning',
+      };
+    }
+
     return {
       disposition: 'skipped',
       gate,
@@ -517,6 +570,8 @@ export async function executeRung(input: ExecuteRungInput): Promise<RungOutcome>
  */
 function buildAction(
   input: ExecuteRungInput,
+  /** Already narrowed by the gate — never read `facts.eligibleChannels` here. */
+  eligibleChannels: readonly Channel[],
 ): { action: Action; channels: Channel[]; fanout?: boolean } | null {
   const { rung, rungIndex, gathered, diagnosisRails, sameInstrumentRetry } = input;
 
@@ -535,8 +590,8 @@ function buildAction(
        * the policy still decides which message goes out first.
        */
       const channels = rung.fanout
-        ? rung.channels.filter((c) => gathered.facts.eligibleChannels.includes(c))
-        : [selectChannel(rung.channels, gathered.facts.eligibleChannels)].filter(
+        ? rung.channels.filter((c) => eligibleChannels.includes(c))
+        : [selectChannel(rung.channels, eligibleChannels)].filter(
             (c): c is Channel => c !== null,
           );
 
@@ -565,7 +620,7 @@ function buildAction(
     }
 
     case 'send_pre_debit_notice': {
-      const channel = selectChannel(rung.channels, gathered.facts.eligibleChannels);
+      const channel = selectChannel(rung.channels, eligibleChannels);
       if (!channel) return null;
       return {
         action: {

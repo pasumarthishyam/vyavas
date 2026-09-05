@@ -20,6 +20,9 @@
  */
 
 import { NonRetriableError } from 'inngest';
+import { eq } from 'drizzle-orm';
+
+import { recoveryCases } from '../../db/schema/cases.js';
 
 import { parseDuration } from '../../core/policy/duration.js';
 import { POLICY_TABLE } from '../../core/policy/index.js';
@@ -327,17 +330,54 @@ export const runLadder = inngest.createFunction(
     // Recorded explicitly so a case that ends up sending nothing says so in its
     // own timeline. Reading `state = executing` and an empty message log and
     // inferring "the ladder finished" is exactly the guess this event removes.
-    await step.run('ladder-complete', async () => {
+    const completion = await step.run('ladder-complete', async () => {
+      /*
+       * Why it ended, not just that it did.
+       *
+       * "Ladder complete" is true of a case that said everything its class
+       * permits AND of one that was never able to say anything at all, and the
+       * console could not tell them apart — both rendered as the same grey
+       * line. `ceiling_reached` is the one a merchant actually needs to see: it
+       * means the agent is finished with this customer by design, and any
+       * further contact is a decision for a person.
+       *
+       * Counted from the case's own `messages_sent`, which the executor
+       * increments per message (a fanout pair counts as two), against the
+       * policy row's declared ceiling.
+       */
+      const [row] = await db
+        .select({ sent: recoveryCases.messagesSent })
+        .from(recoveryCases)
+        .where(eq(recoveryCases.id, caseId))
+        .limit(1);
+
+      const sent = Number(row?.sent ?? 0);
+      const reason = sent >= policy.maxMessages && policy.maxMessages > 0
+        ? 'ceiling_reached'
+        : 'ladder_exhausted';
+
       await appendEvent(db, {
         caseId,
         merchantId,
         kind: 'ladder_complete',
+        reason,
         actor: 'workflow',
-        payload: { rungs: policy.ladder.length, results },
+        payload: {
+          rungs: policy.ladder.length,
+          messagesSent: sent,
+          maxMessages: policy.maxMessages,
+          results,
+        },
       });
-      return { done: true };
+      return { reason, sent };
     });
 
-    return { caseId, outcome: 'ladder_complete', rungs: policy.ladder.length, results };
+    return {
+      caseId,
+      outcome: 'ladder_complete',
+      reason: completion.reason,
+      rungs: policy.ladder.length,
+      results,
+    };
   },
 );

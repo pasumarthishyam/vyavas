@@ -49,6 +49,22 @@ export async function getVoiceCallByVapiId(db: Database, vapiCallId: string) {
   return rows.at(0) ?? null;
 }
 
+/**
+ * Calls placed on this case, in ANY state.
+ *
+ * Counts failures and unanswered calls too, deliberately. What the per-case
+ * limit bounds is how many times this person's phone rings — an unanswered call
+ * rang exactly as often as an answered one. Counting only completed calls would
+ * let three no-answers become an unbounded redial loop.
+ */
+export async function countCallsForCase(db: Database, caseId: string): Promise<number> {
+  const [row] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(voiceCalls)
+    .where(eq(voiceCalls.caseId, caseId));
+  return Number(row?.n ?? 0);
+}
+
 export async function getVoiceCall(db: Database, id: string) {
   const rows = await db.select().from(voiceCalls).where(eq(voiceCalls.id, id)).limit(1);
   return rows.at(0) ?? null;
