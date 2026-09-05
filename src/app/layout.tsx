@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { Analytics } from '@vercel/analytics/next';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -61,7 +62,29 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <script dangerouslySetInnerHTML={{ __html: THEME_BOOT }} />
         <script dangerouslySetInnerHTML={{ __html: SIDEBAR_BOOT }} />
       </head>
-      <body>{children}</body>
+      <body>
+        {children}
+        {/*
+          Vercel Web Analytics — page views only.
+
+          Here rather than in `(app)/layout.tsx` so the sign-in page counts too:
+          someone who lands on /login and never gets further is exactly the visit
+          worth knowing about, and the `(app)` layout by definition never renders
+          for them.
+
+          Renders a script tag and nothing else, so it costs no layout space and
+          cannot shift the page. In development it is inert (the package
+          short-circuits when it is not on a Vercel deployment), which is why
+          nothing appears locally and nothing needs to be gated behind an env
+          check here.
+
+          It reports the App Router's ROUTE, so a case page is counted as
+          `/cases/[id]` rather than as the case's own UUID — worth keeping in
+          mind before adding any route that puts a customer identifier in the
+          path itself.
+        */}
+        <Analytics />
+      </body>
     </html>
   );
 }
