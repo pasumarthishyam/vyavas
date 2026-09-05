@@ -77,7 +77,7 @@ them and what they are allowed to do.
 | **Woken by** | Razorpay `payment.failed` webhook | The merchant's own app, via an authenticated webhook | A person, from the console |
 | **What it does** | Diagnoses the failure, resolves a ladder, sends nudges and payment links over hours | Issues a flat ₹200 discount link and emails it | Places a voice call and may negotiate a discount |
 | **Channels** | WhatsApp, email | Email only | Voice (telephony or in-browser WebRTC) |
-| **Autonomy** | Fully automatic once a case exists | Fully automatic per reported cart | Never automatic — a human starts every call |
+| **Autonomy** | Fully automatic once a case exists | Fully automatic per reported cart | Never automatic — a human starts every call due to lack of registered number to call customers directly|
 | **Hard ceiling** | ≤ 4 touches, set by cause class | One email per cart | 2 calls per case; ₹500 and 30% of order |
 | **Money it can move** | None | ₹200 flat, capped at 30% of the cart | Tiered ₹200 → ₹500, capped at 30% |
 
