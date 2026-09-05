@@ -281,6 +281,25 @@ export function evaluatePreconditions(
 
   // ── defers ──
 
+  /*
+   * Computed once, used by both the frequency cap and quiet hours below.
+   *
+   * A card that failed ninety seconds ago, on the FIRST touch this case has
+   * ever sent, is the one situation in this whole gate where "wait" is
+   * actively the wrong answer — see the long comment on the quiet-hours branch
+   * for why. The frequency cap earns the same exemption, and for the same
+   * reason: it is a "not right now" reason (see the header comment on this
+   * file), and a customer_input case is designed to fire at 0m specifically so
+   * a typo gets answered before the person leaves the page. Without this, a
+   * DIFFERENT agent's unrelated message earlier the same day — an abandoned-
+   * cart email, a discount call — could silently push this customer over the
+   * shared daily cap, and the one class built to answer in seconds would defer
+   * for up to 24 hours instead. That is not a timing inconvenience, it is the
+   * live-customer exemption failing at the one moment it exists for.
+   */
+  const customerIsLive =
+    facts.isFirstTouch && facts.minutesSinceFailure <= facts.liveCustomerWindowMinutes;
+
   // Someone mid-retry on another card must not be interrupted. Retry just past
   // the window rather than immediately, or we would busy-wait against it.
   if (required.includes('no_live_attempt') && facts.lastAttemptAt) {
@@ -318,7 +337,11 @@ export function evaluatePreconditions(
     );
   }
 
-  if (required.includes('within_frequency_cap') && facts.recentMessageCount >= facts.frequencyCap) {
+  if (
+    required.includes('within_frequency_cap') &&
+    facts.recentMessageCount >= facts.frequencyCap &&
+    !customerIsLive
+  ) {
     // The window is rolling, so a slot frees exactly 24h after the oldest
     // message still in it. Computed, not guessed — the caller sleeps until this
     // instant, and a wrong answer here is a dropped case (see the field's note).
@@ -364,11 +387,10 @@ export function evaluatePreconditions(
   //
   // Scoped so it cannot become a 3am loophole: FIRST touch only, and only
   // inside a short window after the failure. Every later rung obeys quiet hours
-  // normally.
+  // normally. `customerIsLive` is the same fact the frequency-cap check above
+  // just used, for the same reason — see its own comment, near the top of the
+  // defers.
   if (required.includes('not_quiet_hours')) {
-    const customerIsLive =
-      facts.isFirstTouch && facts.minutesSinceFailure <= facts.liveCustomerWindowMinutes;
-
     if (!customerIsLive) {
       const allowed = nextAllowedTime(facts.now, facts.timeZone, facts.quietHours);
       if (allowed.getTime() > facts.now.getTime()) {

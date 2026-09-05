@@ -15,10 +15,12 @@ import {
   getDailyTrend,
   getMethodBankHeatmap,
   getRecentCases,
+  getRecoveryOverview,
   getRevenueAtRisk,
   getTopReasons,
 } from '../../src/db/queries/dashboard.js';
 import { getCaseDetail } from '../../src/db/queries/case-detail.js';
+import { markPaymentConfirmedById } from '../../src/db/repos/voice-calls.js';
 import { lastNDays } from '../../src/lib/date-range.js';
 import { createTestDb, schema, seedCustomer, seedMerchant, type TestDb } from './harness.js';
 
@@ -128,6 +130,81 @@ describe('getRevenueAtRisk', () => {
     const r = await getRevenueAtRisk(t.db, await seedMerchant(t.db), lastNDays(30));
     expect(r.atRiskPaise).toBe(0);
     expect(r.atRiskCases).toBe(0);
+  });
+});
+
+describe('getRecoveryOverview', () => {
+  it('attributes a voice-call recovery to the discount caller, not the ladder', async () => {
+    // A case the ladder recovered on its own — no call ever placed.
+    await addCase({ amount: 90_000, state: 'recovered', recovered: 90_000 });
+
+    // A case that also went to `recovered`, but only because a discount call
+    // closed it — the one attribution this query exists to get right.
+    const calledCaseId = await addCase({ amount: 60_000, state: 'recovered', recovered: 50_000 });
+    const [call] = await t.db
+      .insert(schema.voiceCalls)
+      .values({
+        caseId: calledCaseId,
+        merchantId,
+        vapiCallId: `vapi_${Math.random().toString(36).slice(2, 8)}`,
+        customerPhone: '+919876543210',
+      })
+      .returning({ id: schema.voiceCalls.id });
+    await markPaymentConfirmedById(t.db, call!.id);
+
+    // One still open, one written off — so the totals below are a sum of
+    // several non-zero slices, not a coincidence of one field being zero.
+    await addCase({ amount: 100_000, state: 'diagnosed' });
+    await addCase({ amount: 20_000, state: 'lost' });
+
+    await t.db.insert(schema.abandonedCarts).values([
+      {
+        merchantId,
+        externalCartId: 'cart_open',
+        customerEmail: 'open@example.com',
+        amountPaise: 30_000,
+        status: 'detected',
+      },
+      {
+        merchantId,
+        externalCartId: 'cart_paid',
+        customerEmail: 'paid@example.com',
+        amountPaise: 999,
+        paymentLinkAmountPaise: 499,
+        status: 'recovered',
+      },
+    ]);
+
+    const o = await getRecoveryOverview(t.db, merchantId, lastNDays(30));
+
+    // The ladder's own recovered figure excludes the call — the double-count
+    // this attribution logic exists to prevent.
+    expect(o.failedPayment.recoveredPaise).toBe(90_000);
+    expect(o.failedPayment.recoveredCount).toBe(1);
+    expect(o.failedPayment.atRiskPaise).toBe(100_000);
+    expect(o.failedPayment.writtenOffPaise).toBe(20_000);
+
+    expect(o.discountCaller.recoveredPaise).toBe(50_000);
+    expect(o.discountCaller.recoveredCount).toBe(1);
+    expect(o.discountCaller.callsPlaced).toBe(1);
+
+    // The cart recovers its OWN recorded amount (the discounted link), not the
+    // cart's original value — same rule `getAbandonedCartSummary` follows.
+    expect(o.abandonedCart.recoveredPaise).toBe(499);
+    expect(o.abandonedCart.atRiskPaise).toBe(30_000);
+
+    // Nothing here is the ladder's figure plus the call's figure plus the
+    // cart's figure added twice.
+    expect(o.totalRecoveredPaise).toBe(90_000 + 50_000 + 499);
+    expect(o.totalAtRiskPaise).toBe(100_000 + 30_000);
+    expect(o.totalWrittenOffPaise).toBe(20_000);
+  });
+
+  it('returns zeroes for a merchant with nothing', async () => {
+    const o = await getRecoveryOverview(t.db, await seedMerchant(t.db), lastNDays(30));
+    expect(o.totalAtRiskPaise).toBe(0);
+    expect(o.totalRecoveredPaise).toBe(0);
+    expect(o.discountCaller.callsPlaced).toBe(0);
   });
 });
 

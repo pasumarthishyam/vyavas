@@ -169,8 +169,15 @@ describe('getRecentAbandonedCarts', () => {
   });
 });
 
-describe('getAbandonedCartSummary', () => {
-  it('counts links whose email never went out, and ignores carts that recorded no verdict', async () => {
+describe('an undelivered link is visible per cart, not as a page-level count', () => {
+  /*
+   * This used to assert a `notDeliveredCount` on the summary, which fed a
+   * warning banner above the table. The banner is gone: a count cannot say
+   * WHICH cart, so the only thing it let an operator do was scroll down and
+   * look — which is what the table is for. The fact itself still has to be
+   * exact on the row, which is what this now pins.
+   */
+  it('distinguishes delivered, undelivered, and never-recorded carts', async () => {
     const undelivered = await seedCart('cart-undelivered');
     await recordCartLinkIssued(t.db, undelivered, {
       ...link,
@@ -182,15 +189,29 @@ describe('getAbandonedCartSummary', () => {
     await recordCartLinkIssued(t.db, delivered, { ...link, emailStatus: 'sent', emailDetail: null });
 
     // A row from before delivery tracking: no verdict either way. It must not
-    // be accused of a failure nobody can verify.
+    // be reported as a failure nobody can verify.
     const legacy = await seedCart('cart-legacy');
     await t.db
       .update(schema.abandonedCarts)
       .set({ status: 'emailed', emailSentAt: new Date() })
       .where(eq(schema.abandonedCarts.id, legacy));
 
+    const rows = await getRecentAbandonedCarts(t.db, merchantId);
+    const byId = new Map(rows.map((r) => [r.id, r]));
+
+    expect(byId.get(undelivered)?.emailStatus).toBe('failed');
+    expect(byId.get(undelivered)?.emailDetail).toContain('mailbox does not exist');
+    expect(byId.get(undelivered)?.emailSentAt).toBeNull();
+
+    expect(byId.get(delivered)?.emailStatus).toBe('sent');
+    expect(byId.get(delivered)?.emailSentAt).not.toBeNull();
+
+    expect(byId.get(legacy)?.emailStatus).toBeNull();
+
+    // The summary still counts what it always did — the `failed` lifecycle
+    // slice — and nothing here inflates it.
     const summary = await getAbandonedCartSummary(t.db, merchantId, lastNDays(30));
-    expect(summary.notDeliveredCount).toBe(1);
+    expect(summary.failedCount).toBe(0);
     expect(summary.totalCount).toBe(3);
   });
 });

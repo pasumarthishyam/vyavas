@@ -21,8 +21,11 @@ import { paiseFromColumn } from '../util.js';
 import { recoveryCases } from '../schema/cases.js';
 import { merchantAlerts } from '../schema/ops.js';
 import { customers } from '../schema/customers.js';
+import { voiceCalls } from '../schema/voice.js';
+import { abandonedCarts } from '../schema/abandoned-cart.js';
 import type { CaseState } from '../../core/case/types.js';
 import { priorRange, rangeSpanDays, type DateRange } from '../../lib/date-range.js';
+import { getAbandonedCartSummary } from './abandoned-cart-agent.js';
 
 const num = paiseFromColumn;
 
@@ -89,6 +92,185 @@ export async function getRevenueAtRisk(
     lostCases: num(totals?.lostCases),
     customersAffected: num(totals?.customers),
     deltaPct: previous > 0 ? ((current - previous) / previous) * 100 : null,
+  };
+}
+
+// ─── the whole product, in one number per agent ─────────────────────────────
+
+/** One agent's own money: what it still has to bring in, what it has, and what
+ *  it gave up on. */
+export interface AgentMoney {
+  atRiskPaise: number;
+  atRiskCount: number;
+  recoveredPaise: number;
+  recoveredCount: number;
+  /** Deadline passed, or the 24h link window closed, still unpaid. */
+  writtenOffPaise: number;
+  writtenOffCount: number;
+}
+
+export interface RecoveryOverview {
+  /** `failedPayment.atRiskPaise + abandonedCart.atRiskPaise`. Never the discount
+   *  caller's — see the note on `discountCaller` below. */
+  totalAtRiskPaise: number;
+  totalAtRiskCases: number;
+  /** Every paisa this account has recovered, by any agent, any channel. */
+  totalRecoveredPaise: number;
+  totalRecoveredCases: number;
+  totalWrittenOffPaise: number;
+  totalWrittenOffCases: number;
+  /** Distinct people with a live failed payment right now — the discount
+   *  caller's pool, not a separate count, so it is not added a second time. */
+  customersAffected: number;
+  deltaPct: number | null;
+
+  /** The ladder: every live Razorpay failure, and what it alone closed —
+   *  a case the discount caller phoned and closed counts under
+   *  `discountCaller` instead, never both, so the three cards sum to the
+   *  total above without re-adding anything. */
+  failedPayment: AgentMoney;
+
+  /**
+   * Not a fourth pool of money — a second CHANNEL against the ladder's own
+   * pool. A callable case is already sitting inside `failedPayment.atRiskPaise`
+   * before anyone dials it, so this agent has no independent "at risk" figure
+   * of its own; what it has is a share of the ladder's recoveries and the
+   * calls it took to get them.
+   */
+  discountCaller: {
+    recoveredPaise: number;
+    recoveredCount: number;
+    callsPlaced: number;
+  };
+
+  /** Carts that never became a `recovery_cases` row at all — no payment was
+   *  ever attempted, so this is genuinely separate money from the other two. */
+  abandonedCart: AgentMoney;
+}
+
+/**
+ * Every agent's contribution to one merchant's recovery picture, scoped to one
+ * date range.
+ *
+ * This is the ONLY place "how much have we recovered, overall" is computed.
+ * `getRevenueAtRisk` above answers a narrower question — the failed-payment
+ * ladder alone — and answered it first, so `/recovery` and the case table
+ * still read from it directly. This function exists because the Overview page
+ * asks a wider question than that one query can answer honestly: a merchant
+ * looking at the top of their dashboard should see everything three separate
+ * agents have brought in, not just the one that happened to ship first.
+ *
+ * The one subtlety worth stating plainly: a case the discount caller closes IS
+ * a `recovery_cases` row (it dials an existing failed payment; see
+ * `db/queries/voice-agent.ts`), so its recovered amount already lives in that
+ * table. Attributing it to `discountCaller` and `failedPayment` both would
+ * double it in the total, so `failedPayment.recoveredPaise` is the ladder's
+ * recoveries MINUS whichever ones a voice call actually closed — found by an
+ * `exists` against `voice_calls.payment_confirmed_at`, the same fact the
+ * webhook wrote when the call's link was paid.
+ */
+export async function getRecoveryOverview(
+  db: Database,
+  merchantId: string,
+  range: DateRange,
+): Promise<RecoveryOverview> {
+  const scope = and(eq(recoveryCases.merchantId, merchantId), inRange(range));
+  const paidByCall = sql`exists (
+    select 1 from ${voiceCalls}
+    where ${voiceCalls.caseId} = ${recoveryCases.id}
+      and ${voiceCalls.paymentConfirmedAt} is not null
+  )`;
+
+  const [caseTotals] = await db
+    .select({
+      atRisk: sql`coalesce(sum(case when ${recoveryCases.state} in ('detected','diagnosed','executing','paused') then ${recoveryCases.amountAtRiskPaise} else 0 end), 0)`,
+      atRiskCases: sql`count(*) filter (where ${recoveryCases.state} in ('detected','diagnosed','executing','paused'))`,
+      recovered: sql`coalesce(sum(case when ${recoveryCases.state} = 'recovered' then coalesce(${recoveryCases.recoveredAmountPaise}, ${recoveryCases.amountAtRiskPaise}) else 0 end), 0)`,
+      recoveredCases: sql`count(*) filter (where ${recoveryCases.state} = 'recovered')`,
+      recoveredViaCall: sql`coalesce(sum(case when ${recoveryCases.state} = 'recovered' and ${paidByCall} then coalesce(${recoveryCases.recoveredAmountPaise}, ${recoveryCases.amountAtRiskPaise}) else 0 end), 0)`,
+      recoveredViaCallCases: sql`count(*) filter (where ${recoveryCases.state} = 'recovered' and ${paidByCall})`,
+      lost: sql`coalesce(sum(case when ${recoveryCases.state} = 'lost' then ${recoveryCases.amountAtRiskPaise} else 0 end), 0)`,
+      lostCases: sql`count(*) filter (where ${recoveryCases.state} = 'lost')`,
+      customers: sql`count(distinct ${recoveryCases.customerId}) filter (where ${recoveryCases.state} in ('detected','diagnosed','executing','paused'))`,
+      total: sql`coalesce(sum(${recoveryCases.amountAtRiskPaise}), 0)`,
+    })
+    .from(recoveryCases)
+    .where(scope);
+
+  const [callTotals] = await db
+    .select({ placed: count() })
+    .from(voiceCalls)
+    .where(
+      and(
+        eq(voiceCalls.merchantId, merchantId),
+        gte(voiceCalls.createdAt, range.from),
+        lt(voiceCalls.createdAt, range.to),
+      ),
+    );
+
+  const cart = await getAbandonedCartSummary(db, merchantId, range);
+
+  // The same "preceding window of equal length" comparison `getRevenueAtRisk`
+  // makes for the ladder alone, extended to the cart agent's own total so the
+  // combined hero figure gets an honest trend rather than a borrowed one.
+  const priorSpan = priorRange(range);
+  const [casePrior] = await db
+    .select({ total: sql`coalesce(sum(${recoveryCases.amountAtRiskPaise}), 0)` })
+    .from(recoveryCases)
+    .where(and(eq(recoveryCases.merchantId, merchantId), inRange(priorSpan)));
+  const [cartPrior] = await db
+    .select({ total: sql`coalesce(sum(${abandonedCarts.amountPaise}), 0)` })
+    .from(abandonedCarts)
+    .where(
+      and(
+        eq(abandonedCarts.merchantId, merchantId),
+        gte(abandonedCarts.createdAt, priorSpan.from),
+        lt(abandonedCarts.createdAt, priorSpan.to),
+      ),
+    );
+
+  const recoveredTotal = num(caseTotals?.recovered);
+  const recoveredViaCall = num(caseTotals?.recoveredViaCall);
+  const recoveredViaCallCases = num(caseTotals?.recoveredViaCallCases);
+  const recoveredCasesTotal = num(caseTotals?.recoveredCases);
+  const atRiskPaise = num(caseTotals?.atRisk);
+  const atRiskCases = num(caseTotals?.atRiskCases);
+  const lostPaise = num(caseTotals?.lost);
+  const lostCases = num(caseTotals?.lostCases);
+
+  const current = num(caseTotals?.total) + (cart.atRiskPaise + cart.recoveredPaise + cart.expiredPaise);
+  const previous = num(casePrior?.total) + num(cartPrior?.total);
+
+  return {
+    totalAtRiskPaise: atRiskPaise + cart.atRiskPaise,
+    totalAtRiskCases: atRiskCases + cart.atRiskCount,
+    totalRecoveredPaise: recoveredTotal + cart.recoveredPaise,
+    totalRecoveredCases: recoveredCasesTotal + cart.recoveredCount,
+    totalWrittenOffPaise: lostPaise + cart.expiredPaise,
+    totalWrittenOffCases: lostCases + cart.expiredCount,
+    customersAffected: num(caseTotals?.customers),
+    deltaPct: previous > 0 ? ((current - previous) / previous) * 100 : null,
+    failedPayment: {
+      atRiskPaise,
+      atRiskCount: atRiskCases,
+      recoveredPaise: recoveredTotal - recoveredViaCall,
+      recoveredCount: recoveredCasesTotal - recoveredViaCallCases,
+      writtenOffPaise: lostPaise,
+      writtenOffCount: lostCases,
+    },
+    discountCaller: {
+      recoveredPaise: recoveredViaCall,
+      recoveredCount: recoveredViaCallCases,
+      callsPlaced: Number(callTotals?.placed ?? 0),
+    },
+    abandonedCart: {
+      atRiskPaise: cart.atRiskPaise,
+      atRiskCount: cart.atRiskCount,
+      recoveredPaise: cart.recoveredPaise,
+      recoveredCount: cart.recoveredCount,
+      writtenOffPaise: cart.expiredPaise,
+      writtenOffCount: cart.expiredCount,
+    },
   };
 }
 

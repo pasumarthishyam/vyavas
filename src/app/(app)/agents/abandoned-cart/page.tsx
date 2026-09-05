@@ -9,7 +9,7 @@ import { getAbandonedCartApiKey } from '../../../../db/repos/abandoned-cart-auth
 import { appUrl } from '../../../../lib/env';
 import { resolveDateRange } from '../../../../lib/date-range';
 import { Empty } from '../../../../components/charts';
-import { Alert, Delta, Stat, inr } from '../../../../components/ui';
+import { Delta, Stat, inr } from '../../../../components/ui';
 import { DateRangeFilter } from '../../../../components/date-range-filter';
 import { AbandonedCartConsole } from '../../../../components/abandoned-cart-console';
 import { AbandonedCartIntegrationCard } from '../../../../components/abandoned-cart-integration-card';
@@ -200,26 +200,23 @@ export default async function AbandonedCartPage({
         </div>
       )}
 
-      {summary.failedCount > 0 && (
-        <div style={{ marginBottom: 20 }}>
-          <Alert
-            severity="warning"
-            title={`${summary.failedCount} cart${summary.failedCount === 1 ? '' : 's'} failed to process`}
-            body="Never got as far as a payment link — usually a missing payment provider or an amount too small once the discount applied. The reason for each is on its row below."
-          />
-        </div>
-      )}
+      {/*
+        No aggregate warning banners here, deliberately.
 
-      {summary.notDeliveredCount > 0 && (
-        <div style={{ marginBottom: 20 }}>
-          <Alert
-            severity="warning"
-            title={`${summary.notDeliveredCount} cart${summary.notDeliveredCount === 1 ? ' has' : 's have'} a live payment link nobody was told about`}
-            body="The link was created but the email did not go out — a customer already at their daily message limit, an address the provider rejected, or no email channel on this account. The Email column says which, per cart."
-          />
-        </div>
-      )}
+        There were two — "N carts failed to process" and "N carts have a live
+        payment link nobody was told about" — and both were the same mistake:
+        counting a per-cart fact up into a page-level alert. A banner saying
+        "1 cart" cannot say WHICH cart, so the only thing an operator could do
+        with it was scroll down and look, which is what the table is for. Every
+        fact either one carried is already on the row it belongs to — the Stage
+        column for a cart that never got a link, the Email column for one whose
+        email did not go out — and in that cart's own drawer with its reason and
+        timeline.
 
+        A warning belongs on the thing it is about. Anything genuinely
+        account-wide (the send mode, where email is routed) is still above; that
+        is a property of the account, not a tally of rows.
+      */}
       <AbandonedCartConsole
         carts={carts}
         paused={mode !== 'live'}

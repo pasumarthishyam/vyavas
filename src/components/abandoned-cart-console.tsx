@@ -179,7 +179,7 @@ export function AbandonedCartConsole({
 
 /* ── the two readings of a cart ──────────────────────────────────────────── */
 
-type Tone = 'progress' | 'done' | 'failed' | 'muted' | 'warning';
+type Tone = 'progress' | 'done' | 'failed' | 'muted' | 'warning' | 'open';
 
 const TONE_COLOR: Record<Tone, string> = {
   progress: 'var(--data)',
@@ -187,6 +187,11 @@ const TONE_COLOR: Record<Tone, string> = {
   failed: 'var(--critical)',
   warning: 'var(--warning)',
   muted: 'var(--ink-muted)',
+  // Only ever used on the drawer's own standing "awaiting payment" rung — see
+  // `.tone-open` in globals.css, which is what actually renders it (a hollow
+  // grey marker, not a filled dot). This entry exists so `Tone` stays a total
+  // map and nothing has to special-case the one tone with no solid colour.
+  open: 'var(--ink-muted)',
 };
 
 interface Line {
@@ -432,6 +437,29 @@ function CartDrawer({
       title: 'Link expired unpaid',
       detail: 'the 24h window closed with no payment',
       tone: 'muted',
+    });
+  } else if (c.status === 'emailed' && expires && expires.getTime() > Date.now()) {
+    /*
+     * The standing entry for a cart that is still genuinely live: a link
+     * exists, nobody has paid it yet, and the 24h window has not closed.
+     *
+     * Nothing else is scheduled here — this agent sends one email and then
+     * waits, unlike the failed-payment ladder's multi-rung sequence — so
+     * without this the timeline just stopped after "Email sent" and looked
+     * finished when the cart was, in fact, still open. Same hollow grey
+     * marker (`tone-open`) the recovery console's case drawer uses for the
+     * identical situation, so the two agents say "still waiting" the same way.
+     */
+    rungs.push({
+      at: null,
+      title: 'Awaiting payment',
+      detail: `Open until paid, or until the link expires — ${expires.toLocaleString('en-IN', {
+        day: 'numeric',
+        month: 'short',
+        hour: 'numeric',
+        minute: '2-digit',
+      })}.`,
+      tone: 'open',
     });
   }
 

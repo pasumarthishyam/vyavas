@@ -908,6 +908,44 @@ function UpcomingRung({ next }: { next: PlannedStep }) {
   );
 }
 
+/**
+ * The standing entry every open case gets, whether or not a specific rung is
+ * scheduled.
+ *
+ * `UpcomingRung` names an instant — a message going out at 15:40 — and most of
+ * the time there isn't one: the ladder may have already said everything its
+ * class permits (`customer_input` stops at two touches), or the case may be
+ * capped, paused, or simply between rungs. None of that means nothing is
+ * happening: the case is still open, still watched by the deadline sweep and
+ * the payment webhook, and the only honest thing to say about "what's next"
+ * is that it is waiting to be paid. Showing nothing here is what used to read
+ * as the agent having quietly given up.
+ *
+ * Deliberately below `UpcomingRung` rather than instead of it: a specific
+ * scheduled message is the more concrete, sooner fact, and this is the
+ * standing backdrop it sits in front of.
+ */
+function AwaitingPaymentRung({ deadlineAt }: { deadlineAt: Date | null }) {
+  return (
+    <div className="rung">
+      <div className="rung-at">—</div>
+      <div className="rung-body tone-open">
+        <div className="rung-title">Awaiting payment</div>
+        <div className="rung-detail">
+          {deadlineAt
+            ? `Open until paid, or until the deadline — ${deadlineAt.toLocaleString('en-IN', {
+                day: 'numeric',
+                month: 'short',
+                hour: 'numeric',
+                minute: '2-digit',
+              })}.`
+            : 'Open until paid — no deadline set.'}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function CaseRow({
   c,
   live,
@@ -1285,6 +1323,11 @@ function CaseDrawer({
             {/* Instant, unlike the trace below — it comes straight off `c`,
                 not a fetch, so "what's next" never waits behind a spinner. */}
             {c.nextAction && <UpcomingRung next={c.nextAction} />}
+            {/* Every case in this console is LIVE by definition — see
+                `getRecoverableCases` — so this always applies. It is the
+                answer to "what happens if nothing else is scheduled": the
+                case does not vanish, it waits. */}
+            <AwaitingPaymentRung deadlineAt={c.deadlineAt} />
 
             {trace === null && loadError ? (
               <p className="subtle" style={{ fontSize: 13, color: 'var(--critical)' }}>

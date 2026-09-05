@@ -31,16 +31,13 @@ export interface AbandonedCartSummary {
   /** Link created but the 24h window passed unpaid. */
   expiredPaise: number;
   expiredCount: number;
-  /** Never got as far as a link — Razorpay down, no provider, amount too small. */
-  failedCount: number;
   /**
-   * Got a payment link, but no email reached the customer.
+   * Never got as far as a link — Razorpay down, no provider, amount too small.
    *
-   * Counted only where the row actually recorded a verdict, so carts written
-   * before `email_status` existed are never accused of a failure nobody can
-   * verify either way.
+   * Still counted, still shown as the `failed` slice of the table. What it no
+   * longer feeds is a page-level warning banner: see the note in the page.
    */
-  notDeliveredCount: number;
+  failedCount: number;
   totalCount: number;
   /** Distinct people this agent actually reached a contact record for. */
   customersReached: number;
@@ -64,7 +61,6 @@ export async function getAbandonedCartSummary(
       expired: sql`coalesce(sum(case when ${abandonedCarts.status} = 'expired' then ${abandonedCarts.amountPaise} else 0 end), 0)`,
       expiredCount: sql`count(*) filter (where ${abandonedCarts.status} = 'expired')`,
       failedCount: sql`count(*) filter (where ${abandonedCarts.status} = 'failed')`,
-      notDeliveredCount: sql`count(*) filter (where ${abandonedCarts.emailStatus} is not null and ${abandonedCarts.emailStatus} <> 'sent')`,
       totalCount: sql`count(*)`,
       customers: sql`count(distinct ${abandonedCarts.customerId}) filter (where ${abandonedCarts.customerId} is not null)`,
     })
@@ -87,7 +83,6 @@ export async function getAbandonedCartSummary(
     expiredPaise: num(totals?.expired),
     expiredCount: num(totals?.expiredCount),
     failedCount: num(totals?.failedCount),
-    notDeliveredCount: num(totals?.notDeliveredCount),
     totalCount: num(totals?.totalCount),
     customersReached: num(totals?.customers),
     deltaPct: previous > 0 ? ((current - previous) / previous) * 100 : null,

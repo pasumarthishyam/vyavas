@@ -489,3 +489,120 @@ describe('the live-customer window', () => {
     expect(r.disposition).toBe('abort');
   });
 });
+
+/**
+ * The same live-customer window, extended to the frequency cap.
+ *
+ * The scenario this exists to pin: an abandoned-cart email (or a discount
+ * call) already spent this customer's daily cap earlier today, unrelated to
+ * anything happening now. Hours later a fresh payment fails on a typo'd card —
+ * `customer_input`, the one class engineered to answer in seconds — and
+ * without this exemption it would silently wait up to 24 hours because a
+ * DIFFERENT agent already used the budget.
+ */
+describe('the live-customer window — extended to the frequency cap', () => {
+  it('exempts a live first touch even with the cap already spent', () => {
+    const r = evaluatePreconditions(
+      ALL,
+      facts({
+        recentMessageCount: 2,
+        frequencyCap: 2,
+        isFirstTouch: true,
+        minutesSinceFailure: 1,
+        liveCustomerWindowMinutes: 15,
+      }),
+    );
+    expect(r.disposition).toBe('proceed');
+  });
+
+  it('still defers a follow-up at the cap — the exemption is first-touch only', () => {
+    const r = evaluatePreconditions(
+      ALL,
+      facts({ recentMessageCount: 2, frequencyCap: 2, isFirstTouch: false, minutesSinceFailure: 1 }),
+    );
+    expect(r.disposition).toBe('defer');
+    expect(r.failed).toBe('within_frequency_cap');
+  });
+
+  it('still defers once the live-customer window has passed', () => {
+    // The exemption answers someone who is present right now, not anyone whose
+    // first touch happens to be overdue.
+    const r = evaluatePreconditions(
+      ALL,
+      facts({
+        recentMessageCount: 2,
+        frequencyCap: 2,
+        isFirstTouch: true,
+        minutesSinceFailure: 90,
+        liveCustomerWindowMinutes: 15,
+      }),
+    );
+    expect(r.disposition).toBe('defer');
+    expect(r.failed).toBe('within_frequency_cap');
+  });
+
+  it('clears both the cap and quiet hours together, inside the window', () => {
+    // Both checks read the SAME "is this person live right now" fact on
+    // purpose — a first touch inside the window is exempt everywhere that
+    // fact governs, at any hour, on whatever channel the customer has. Before
+    // this change the cap check ran first and would have deferred here
+    // regardless of the hour.
+    const r = evaluatePreconditions(
+      ALL,
+      facts({
+        now: LATE_IST,
+        timeZone: IST,
+        quietHours: DEFAULT_QUIET_HOURS,
+        recentMessageCount: 2,
+        frequencyCap: 2,
+        isFirstTouch: true,
+        minutesSinceFailure: 1,
+        liveCustomerWindowMinutes: 15,
+        eligibleChannels: ['whatsapp'],
+      }),
+    );
+    expect(r.disposition).toBe('proceed');
+    // Live-window proceed is unrestricted — the email-only narrowing is only
+    // for the OVERNIGHT branch, which this never reaches.
+    expect(r.restrictToChannels).toBeNull();
+  });
+
+  it('still defers for quiet hours once the live window has passed, cap or no cap', () => {
+    // Past the window the cap exemption no longer applies (see the test
+    // above this one) — so this is deferred by the frequency check first, the
+    // same ordering as everywhere else in the gate.
+    const r = evaluatePreconditions(
+      ALL,
+      facts({
+        now: LATE_IST,
+        timeZone: IST,
+        quietHours: DEFAULT_QUIET_HOURS,
+        recentMessageCount: 2,
+        frequencyCap: 2,
+        isFirstTouch: true,
+        minutesSinceFailure: 90,
+        liveCustomerWindowMinutes: 15,
+        eligibleChannels: ['whatsapp'],
+      }),
+    );
+    expect(r.disposition).toBe('defer');
+    expect(r.failed).toBe('within_frequency_cap');
+  });
+
+  it('leaves the cool-off floor untouched — that one stays unconditional', () => {
+    // The cap may bend for a live customer; the floor between two messages to
+    // the SAME person never does (see its own describe block).
+    const r = evaluatePreconditions(
+      ALL,
+      facts({
+        isFirstTouch: true,
+        minutesSinceFailure: 1,
+        liveCustomerWindowMinutes: 15,
+        minutesSinceLastTouch: 5,
+        minGapMinutes: 360,
+      }),
+    );
+    expect(r.disposition).toBe('defer');
+    expect(r.reason).toContain('cool-off');
+  });
+});
